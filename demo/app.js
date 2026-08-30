@@ -1,4 +1,5 @@
 import { assignStudentsToWorkshops } from './vendor/school-workshop-assigner/index.js';
+import { workshopsFromCsv, studentsFromCsv, exclusionsFromCsv } from './csv.js';
 
 const el = (id) => document.getElementById(id);
 
@@ -43,6 +44,79 @@ function loadPreset(preset) {
 
 el('preset-fairness').addEventListener('click', () => loadPreset(PRESETS.fairness));
 el('preset-conflict').addEventListener('click', () => loadPreset(PRESETS.conflict));
+
+// --- CSV import --------------------------------------------------------------
+// A "class" here is one uploaded CSV file's worth of students; loadedClasses
+// tracks them so multiple class files can be merged, mirroring how a teacher
+// would upload one CSV per class in a real app (see README "Input contract").
+let loadedClasses = [];
+
+function renderLoadedClasses() {
+  const list = el('loaded-classes');
+  list.innerHTML =
+    loadedClasses
+      .map(
+        (c, i) =>
+          `<li>${escapeHtml(c.label)} — ${c.students.length} student(s) <button data-index="${i}" class="remove-class" type="button">Remove</button></li>`,
+      )
+      .join('') || '<li class="empty-hint">No class loaded yet.</li>';
+
+  list.querySelectorAll('.remove-class').forEach((button) => {
+    button.addEventListener('click', () => {
+      loadedClasses.splice(Number(button.dataset.index), 1);
+      renderLoadedClasses();
+    });
+  });
+
+  el('students').value = JSON.stringify(loadedClasses.flatMap((c) => c.students), null, 2);
+}
+
+function applyWorkshopsCsv(text) {
+  el('workshops').value = JSON.stringify(workshopsFromCsv(text), null, 2);
+}
+
+function applyClassCsv(label, text) {
+  loadedClasses.push({ label, students: studentsFromCsv(text) });
+  renderLoadedClasses();
+}
+
+function applyExclusionsCsv(text) {
+  el('exclusions').value = JSON.stringify(exclusionsFromCsv(text), null, 2);
+}
+
+function handleFileInput(inputId, apply) {
+  el(inputId).addEventListener('change', async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    apply(file, await file.text());
+    event.target.value = ''; // allow re-selecting the same file later
+  });
+}
+
+handleFileInput('workshops-csv', (_file, text) => applyWorkshopsCsv(text));
+handleFileInput('class-csv', (file, text) => applyClassCsv(file.name, text));
+handleFileInput('exclusions-csv', (_file, text) => applyExclusionsCsv(text));
+
+el('clear-classes').addEventListener('click', () => {
+  loadedClasses = [];
+  renderLoadedClasses();
+});
+
+el('preset-solvay').addEventListener('click', async () => {
+  loadedClasses = [];
+  const [workshopsText, solvayText, franceText, exclusionsText] = await Promise.all([
+    fetch('./samples/workshops.csv').then((r) => r.text()),
+    fetch('./samples/students-solvay-1911.csv').then((r) => r.text()),
+    fetch('./samples/students-france-98.csv').then((r) => r.text()),
+    fetch('./samples/exclusions.csv').then((r) => r.text()),
+  ]);
+  applyWorkshopsCsv(workshopsText);
+  applyClassCsv('students-solvay-1911.csv', solvayText);
+  applyClassCsv('students-france-98.csv', franceText);
+  applyExclusionsCsv(exclusionsText);
+});
+
+renderLoadedClasses();
 
 function readInputFromForm() {
   const workshops = JSON.parse(el('workshops').value || '[]');
