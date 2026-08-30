@@ -74,13 +74,16 @@ export function normaliserDonnees(input: InputRawData): DonneesNormalisees {
   // --- Élèves ----------------------------------------------------------------
   const eleves: EleveNormalise[] = [];
   const compteursEleve = new Map<string, number>();
-  const lookupEleve = new Map<string, string>(); // "classeSlug::nomSlug" -> premier id trouvé
+  const lookupEleve = new Map<string, string>(); // "classeSlug::nomSlug::prenomSlug" -> premier id trouvé
 
   for (const brut of input.eleves) {
     const nom = nettoyerEspaces(brut.nom);
+    const prenom = nettoyerEspaces(brut.prenom);
     const classe = nettoyerEspaces(brut.classe);
+    const identite = `${nom} ${prenom}`.trim();
 
-    const id = idUnique(`el_${slug(classe)}_${slug(nom)}`, compteursEleve);
+    // classe + nom + prénom : le nom de famille seul ne suffit pas à distinguer des jumeaux.
+    const id = idUnique(`el_${slug(classe)}_${slug(nom)}_${slug(prenom)}`, compteursEleve);
 
     const voeuxBruts = [brut.voeu1, brut.voeu2, brut.voeu3];
     const voeuxIds: Array<string | null> = voeuxBruts.map((voeu) => {
@@ -88,7 +91,7 @@ export function normaliserDonnees(input: InputRawData): DonneesNormalisees {
       const atelierId = nomVersAtelierId.get(cleComparaison(voeu));
       if (!atelierId) {
         avertissements.push(
-          `Vœu "${voeu}" de l'élève "${nom}" (${classe}) ne correspond à aucun atelier connu.`,
+          `Vœu "${voeu}" de l'élève "${identite}" (${classe}) ne correspond à aucun atelier connu.`,
         );
         return null;
       }
@@ -96,12 +99,12 @@ export function normaliserDonnees(input: InputRawData): DonneesNormalisees {
     });
 
     if (voeuxIds.every((v) => v === null)) {
-      avertissements.push(`L'élève "${nom}" (${classe}) n'a aucun vœu valide reconnu.`);
+      avertissements.push(`L'élève "${identite}" (${classe}) n'a aucun vœu valide reconnu.`);
     }
 
-    eleves.push({ id, nom, classe, voeuxIds });
+    eleves.push({ id, nom, prenom, classe, voeuxIds });
 
-    const cleLookup = `${slug(classe)}::${slug(nom)}`;
+    const cleLookup = `${slug(classe)}::${slug(nom)}::${slug(prenom)}`;
     if (!lookupEleve.has(cleLookup)) {
       lookupEleve.set(cleLookup, id);
     }
@@ -110,20 +113,21 @@ export function normaliserDonnees(input: InputRawData): DonneesNormalisees {
   // --- Exclusions --------------------------------------------------------
   const exclusions: ExclusionNormalisee[] = [];
   for (const brut of input.exclusions ?? []) {
-    const cleA = `${slug(brut.eleveA.classe)}::${slug(brut.eleveA.nom)}`;
-    const cleB = `${slug(brut.eleveB.classe)}::${slug(brut.eleveB.nom)}`;
+    const cleA = `${slug(brut.eleveA.classe)}::${slug(brut.eleveA.nom)}::${slug(brut.eleveA.prenom)}`;
+    const cleB = `${slug(brut.eleveB.classe)}::${slug(brut.eleveB.nom)}::${slug(brut.eleveB.prenom)}`;
     const idA = lookupEleve.get(cleA);
     const idB = lookupEleve.get(cleB);
 
     if (!idA || !idB) {
       avertissements.push(
-        `Exclusion ignorée (élève introuvable): "${brut.eleveA.nom}" (${brut.eleveA.classe}) / "${brut.eleveB.nom}" (${brut.eleveB.classe}).`,
+        `Exclusion ignorée (élève introuvable): "${brut.eleveA.nom} ${brut.eleveA.prenom}" (${brut.eleveA.classe}) / ` +
+          `"${brut.eleveB.nom} ${brut.eleveB.prenom}" (${brut.eleveB.classe}).`,
       );
       continue;
     }
     if (idA === idB) {
       avertissements.push(
-        `Exclusion ignorée (les deux membres désignent le même élève): "${brut.eleveA.nom}" (${brut.eleveA.classe}).`,
+        `Exclusion ignorée (les deux membres désignent le même élève): "${brut.eleveA.nom} ${brut.eleveA.prenom}" (${brut.eleveA.classe}).`,
       );
       continue;
     }

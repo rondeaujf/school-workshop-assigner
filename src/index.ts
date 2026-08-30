@@ -68,13 +68,22 @@ export async function optimiserAffectations(
       distributionVoeux.horsVoeux += 1;
     }
 
+    const eleveNom = `${eleve.nom} ${eleve.prenom}`.trim();
+
     (parClasse[eleve.classe] ??= []).push({
-      eleveNom: eleve.nom,
+      eleveNom,
+      nom: eleve.nom,
+      prenom: eleve.prenom,
       atelierNom: atelier.nom,
       rangVoeuSatisfait,
     });
 
-    (parAtelier[atelier.nom] ??= []).push({ eleveNom: eleve.nom, classe: eleve.classe });
+    (parAtelier[atelier.nom] ??= []).push({
+      eleveNom,
+      nom: eleve.nom,
+      prenom: eleve.prenom,
+      classe: eleve.classe,
+    });
   }
 
   const conflitsExclusionsNonResolus =
