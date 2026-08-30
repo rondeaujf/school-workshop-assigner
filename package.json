@@ -1,5 +1,5 @@
 {
-  "name": "ltn-opti-class",
+  "name": "school-workshop-assigner",
   "version": "0.1.0",
   "description": "Module d'optimisation d'affectation d'élèves à des ateliers (multi-classes, tolérant aux CSV hétérogènes), basé sur le solveur HiGHS (WebAssembly).",
   "type": "module",

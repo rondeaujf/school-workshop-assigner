@@ -1,4 +1,4 @@
-# ltn-opti-class
+# school-workshop-assigner
 
 Module NPM autonome (Node.js & navigateur) pour résoudre l'affectation d'élèves à des ateliers sous contraintes de capacités et d'exclusions, en s'appuyant sur le solveur [HiGHS](https://highs.dev) compilé en WebAssembly (paquet [`highs`](https://www.npmjs.com/package/highs)).
 
@@ -7,13 +7,13 @@ Conçu pour des saisies CSV hétérogènes et multi-classes (une entrée par cla
 ## Installation
 
 ```bash
-npm install ltn-opti-class
+npm install school-workshop-assigner
 ```
 
 ## Utilisation
 
 ```ts
-import { optimiserAffectations } from 'ltn-opti-class';
+import { optimiserAffectations } from 'school-workshop-assigner';
 
 const resultat = await optimiserAffectations({
   ateliers: [
