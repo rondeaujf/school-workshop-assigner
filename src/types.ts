@@ -1,153 +1,197 @@
 // ---------------------------------------------------------------------------
-// Entrées brutes (issues du parsing CSV, potentiellement multi-classes)
+// Raw input (as parsed from one or more CSV files, potentially multi-class)
 // ---------------------------------------------------------------------------
 
-export interface AtelierInput {
-  nom: string;
-  capaciteMax: number | string;
+export interface WorkshopInput {
+  /** Workshop name, e.g. "Theater". Must be unique after normalization (trim/case/accent-insensitive). */
+  name: string;
+  /** Maximum number of seats. Accepts a number or a numeric string (raw CSV cells are strings). */
+  maxCapacity: number | string;
 }
 
-export interface EleveInput {
-  /** Nom de famille, ex: "Dupont". */
-  nom: string;
-  /** Prénom, ex: "Alice". Requis pour distinguer les jumeaux/homonymes d'une même classe. */
-  prenom: string;
-  classe: string;
-  voeu1?: string;
-  voeu2?: string;
-  voeu3?: string;
+export interface StudentInput {
+  /** Family name, e.g. "Smith". */
+  lastName: string;
+  /** Given name, e.g. "Alice". Required: family name alone cannot disambiguate twins/siblings in the same class. */
+  firstName: string;
+  className: string;
+  /** Workshop name as typed by the student/teacher. Matched case/accent/space-insensitively against `WorkshopInput.name`. */
+  choice1?: string;
+  choice2?: string;
+  choice3?: string;
 }
 
-export interface EleveRef {
-  nom: string;
-  prenom: string;
-  classe: string;
+/** Identifies a student by the same triplet used to build their internal ID. */
+export interface StudentRef {
+  lastName: string;
+  firstName: string;
+  className: string;
 }
 
 export interface ExclusionInput {
-  eleveA: EleveRef;
-  eleveB: EleveRef;
+  studentA: StudentRef;
+  studentB: StudentRef;
 }
 
-export interface OptionsInput {
-  /** Points attribués par rang de vœu satisfait. Défaut: [100, 40, 10]. */
-  poidsVoeux?: number[];
+export interface AssignmentOptions {
   /**
-   * Si true (défaut), les exclusions sont des contraintes dures.
-   * Si false, elles sont converties en pénalités fortes dans l'objectif.
+   * Weights used only to compute the informational `totalScore` summary metric
+   * (rank 1 / 2 / 3). They do NOT drive the optimization itself: fairness across
+   * students takes priority over maximizing a weighted sum (see README "Fairness
+   * model"). Default: [100, 40, 10].
+   */
+  choiceWeights?: number[];
+  /**
+   * If true (default), pairwise exclusions are hard constraints: two excluded
+   * students can never share a workshop. When that is mathematically impossible
+   * given capacities, the solver does NOT silently relax it — it returns
+   * `status: 'NEEDS_CONFIRMATION'` with a preview of the unavoidable conflicts
+   * instead. Set to false to skip that safety step entirely and always resolve
+   * conflicts as soft penalties on the first call (useful for automated/CI
+   * contexts where no human can confirm).
    */
   strictExclusions?: boolean;
+  /**
+   * Set to true only after a human has reviewed a prior `NEEDS_CONFIRMATION`
+   * response and explicitly approved relaxing the unavoidable exclusion
+   * conflicts it listed. Skips the confirmation step for this call and commits
+   * directly to the best-effort result (`status: 'FEASIBLE_WITH_CONFLICTS'`).
+   */
+  confirmedExclusionRelaxation?: boolean;
 }
 
-export interface InputRawData {
-  ateliers: AtelierInput[];
-  eleves: EleveInput[];
+export interface AssignmentInput {
+  workshops: WorkshopInput[];
+  students: StudentInput[];
   exclusions?: ExclusionInput[];
-  options?: OptionsInput;
+  options?: AssignmentOptions;
 }
 
 // ---------------------------------------------------------------------------
-// Données normalisées (internes)
+// Normalized data (internal)
 // ---------------------------------------------------------------------------
 
-export interface AtelierNormalise {
+export interface NormalizedWorkshop {
   id: string;
-  nom: string;
-  capaciteMax: number;
+  name: string;
+  maxCapacity: number;
 }
 
-export interface EleveNormalise {
-  /** Identifiant composite unique: `el_<classe>_<nom>_<prenom>` (distingue les jumeaux). */
+export interface NormalizedStudent {
+  /** Unique composite ID: `st_<className>_<lastName>_<firstName>` (disambiguates twins). */
   id: string;
-  nom: string;
-  prenom: string;
-  classe: string;
-  /** IDs d'ateliers alignés sur [voeu1, voeu2, voeu3, ...], `null` si absent ou non reconnu. */
-  voeuxIds: Array<string | null>;
+  lastName: string;
+  firstName: string;
+  className: string;
+  /** Workshop IDs aligned with [choice1, choice2, choice3], `null` if absent or unrecognized. */
+  choiceIds: Array<string | null>;
 }
 
-export interface ExclusionNormalisee {
-  eleveAId: string;
-  eleveBId: string;
-  eleveA: EleveRef;
-  eleveB: EleveRef;
+export interface NormalizedExclusion {
+  studentAId: string;
+  studentBId: string;
+  studentA: StudentRef;
+  studentB: StudentRef;
 }
 
-export interface OptionsNormalisees {
-  poidsVoeux: number[];
+export interface NormalizedOptions {
+  choiceWeights: number[];
   strictExclusions: boolean;
+  confirmedExclusionRelaxation: boolean;
 }
 
-export interface DonneesNormalisees {
-  ateliers: AtelierNormalise[];
-  eleves: EleveNormalise[];
-  exclusions: ExclusionNormalisee[];
-  options: OptionsNormalisees;
-  avertissements: string[];
+export interface NormalizedInput {
+  workshops: NormalizedWorkshop[];
+  students: NormalizedStudent[];
+  exclusions: NormalizedExclusion[];
+  options: NormalizedOptions;
+  warnings: string[];
 }
 
-export class ErreurCoherence extends Error {
+/**
+ * Thrown for structurally invalid input that the caller must fix before
+ * retrying (e.g. insufficient total capacity, no workshops at all). This is a
+ * programming/data error, not a solver outcome — unlike infeasibility or
+ * exclusion conflicts, which are returned as a typed `AssignmentResult`
+ * because they are legitimate business outcomes a UI needs to render.
+ */
+export class CoherenceError extends Error {
   details: Record<string, unknown>;
 
   constructor(message: string, details: Record<string, unknown> = {}) {
     super(message);
-    this.name = 'ErreurCoherence';
+    this.name = 'CoherenceError';
     this.details = details;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Sortie
+// Output
 // ---------------------------------------------------------------------------
 
-export type Statut = 'OPTIMAL' | 'FEASIBLE' | 'FEASIBLE_WITH_CONFLICTS' | 'INFEASIBLE';
+export type AssignmentStatus =
+  | 'OPTIMAL'
+  | 'FEASIBLE'
+  | 'FEASIBLE_WITH_CONFLICTS'
+  | 'NEEDS_CONFIRMATION'
+  | 'INFEASIBLE';
 
-export interface AffectationParClasse {
-  /** Nom complet affiché, ex: "Dupont Alice". */
-  eleveNom: string;
-  nom: string;
-  prenom: string;
-  atelierNom: string;
-  rangVoeuSatisfait: number | null;
+export interface ClassroomAssignment {
+  /** Display name, e.g. "Smith Alice". */
+  studentName: string;
+  lastName: string;
+  firstName: string;
+  workshopName: string;
+  /** 1, 2, 3, or `null` if the student did not get any of their declared choices. */
+  satisfiedChoiceRank: number | null;
 }
 
-export interface AffectationParAtelier {
-  eleveNom: string;
-  nom: string;
-  prenom: string;
-  classe: string;
+export interface WorkshopAssignment {
+  studentName: string;
+  lastName: string;
+  firstName: string;
+  className: string;
 }
 
-export interface ConflitExclusion {
-  eleveA: EleveRef;
-  eleveB: EleveRef;
-  atelier: string;
+export interface ExclusionConflict {
+  studentA: StudentRef;
+  studentB: StudentRef;
+  workshop: string;
 }
 
-export interface OutputResult {
-  succes: boolean;
-  statut: Statut;
+export interface ChoiceDistribution {
+  choice1: number;
+  choice2: number;
+  choice3: number;
+  unmatched: number;
+}
+
+export interface AssignmentResult {
+  /** False for INFEASIBLE and NEEDS_CONFIRMATION — neither is a final, actionable assignment. */
+  success: boolean;
+  status: AssignmentStatus;
   message?: string;
-  scoreTotal: number;
-  statistiques: {
-    nbElevesTotaux: number;
-    distributionVoeux: {
-      voeu1: number;
-      voeu2: number;
-      voeu3: number;
-      horsVoeux: number;
-    };
+  /** Informational only (see `AssignmentOptions.choiceWeights`) — not the optimization objective. */
+  totalScore: number;
+  statistics: {
+    totalStudents: number;
+    choiceDistribution: ChoiceDistribution;
   };
-  /** Affectations groupées par classe (pour l'UI et les exports CSV/PDF). */
-  parClasse: Record<string, AffectationParClasse[]>;
-  /** Affectations groupées par atelier (pour les listes de présence). */
-  parAtelier: Record<string, AffectationParAtelier[]>;
-  conflitsExclusionsNonResolus?: ConflitExclusion[];
-  /** Avertissements non bloquants (vœux non reconnus, exclusions ignorées, etc.). */
-  avertissements?: string[];
+  /** Assignments grouped by class, for UI display and CSV/PDF export. */
+  byClassroom: Record<string, ClassroomAssignment[]>;
+  /** Assignments grouped by workshop, for attendance sheets. */
+  byWorkshop: Record<string, WorkshopAssignment[]>;
+  /**
+   * Present when `status` is `FEASIBLE_WITH_CONFLICTS` or `NEEDS_CONFIRMATION`:
+   * the exclusion pairs that end up sharing a workshop in the (tentative, for
+   * NEEDS_CONFIRMATION) best-effort solution.
+   */
+  unresolvedExclusionConflicts?: ExclusionConflict[];
+  /** Non-blocking warnings (unrecognized choices, unmatched exclusion references, etc). */
+  warnings?: string[];
 }
 
-/** Options transmises au chargeur du solveur HiGHS (ex: `locateFile` pour le navigateur). */
+/** Options passed to the HiGHS WebAssembly loader (e.g. `locateFile` for browser bundling). */
 export interface HighsLoaderOptions {
   locateFile?: (file: string) => string;
 }

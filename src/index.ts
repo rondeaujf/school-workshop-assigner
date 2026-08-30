@@ -1,115 +1,124 @@
 export * from './types.js';
-export { normaliserDonnees, slug } from './normalizer.js';
-export { verifierCoherence } from './validator.js';
+export { normalizeInput, slugify } from './normalizer.js';
+export { validateCoherence } from './validator.js';
 
-import { normaliserDonnees } from './normalizer.js';
-import { verifierCoherence } from './validator.js';
-import { resoudre } from './solver.js';
-import type { HighsLoaderOptions, InputRawData, OutputResult } from './types.js';
+import { normalizeInput } from './normalizer.js';
+import { validateCoherence } from './validator.js';
+import { solveAssignment } from './solver.js';
+import type { AssignmentInput, AssignmentResult, HighsLoaderOptions } from './types.js';
+
+const SUCCESS_STATUSES = new Set(['OPTIMAL', 'FEASIBLE', 'FEASIBLE_WITH_CONFLICTS']);
 
 /**
- * Résout le problème d'affectation d'élèves à des ateliers à partir de
- * données brutes (potentiellement multi-classes et tolérantes aux CSV
- * hétérogènes).
+ * Assigns students to workshops under capacity and exclusion constraints.
  *
- * @param input Données brutes (ateliers, élèves, exclusions, options).
- * @param loaderOptions Options passées au chargeur HiGHS WebAssembly
- *   (ex: `locateFile` pour pointer vers le `.wasm` dans un navigateur).
- * @throws {ErreurCoherence} si les données sont structurellement incohérentes
- *   (ex: capacité totale insuffisante, aucun atelier fourni).
+ * See the README's "Input contract" section for the exact shape and
+ * tolerances expected of `input`. In short: `workshops`/`students` are plain
+ * arrays merged from as many CSV sources as needed; names and choices are
+ * matched case/accent/whitespace-insensitively; `exclusions` reference
+ * students by `(className, lastName, firstName)`.
+ *
+ * Fairness: the solver never trades away a higher-priority outcome (more
+ * 1st-choice matches) for a lower-priority one (more 2nd/3rd-choice matches),
+ * and additionally balances "no choice satisfied" outcomes across classes.
+ * See `src/solver.ts` for the exact lexicographic stages.
+ *
+ * Exclusion conflicts: when honoring every exclusion is impossible given
+ * capacities, this does NOT silently pick which pair to violate. It returns
+ * `status: 'NEEDS_CONFIRMATION'` with a preview (including which pairs would
+ * be affected). Call again with `options.confirmedExclusionRelaxation: true`
+ * to commit to that resolution. Set `options.strictExclusions: false` to skip
+ * this safety step entirely (e.g. for unattended/CI usage).
+ *
+ * @throws {CoherenceError} for structurally invalid input (e.g. insufficient
+ *   total capacity, no workshops at all) — a data problem the caller must fix,
+ *   as opposed to solver outcomes like infeasibility, which are returned.
  */
-export async function optimiserAffectations(
-  input: InputRawData,
+export async function assignStudentsToWorkshops(
+  input: AssignmentInput,
   loaderOptions?: HighsLoaderOptions,
-): Promise<OutputResult> {
-  const donnees = normaliserDonnees(input);
-  const avertissements = verifierCoherence(donnees);
+): Promise<AssignmentResult> {
+  const data = normalizeInput(input);
+  const warnings = validateCoherence(data);
 
-  const resultat = await resoudre(donnees, loaderOptions);
+  const outcome = await solveAssignment(data, loaderOptions);
 
-  if (resultat.statut === 'INFEASIBLE' || !resultat.affectations) {
+  const emptyDistribution = { choice1: 0, choice2: 0, choice3: 0, unmatched: 0 };
+
+  if (!outcome.assignments) {
     return {
-      succes: false,
-      statut: 'INFEASIBLE',
-      message: resultat.message ?? "Le problème n'admet pas de solution réalisable.",
-      scoreTotal: 0,
-      statistiques: {
-        nbElevesTotaux: donnees.eleves.length,
-        distributionVoeux: { voeu1: 0, voeu2: 0, voeu3: 0, horsVoeux: 0 },
-      },
-      parClasse: {},
-      parAtelier: {},
-      avertissements: avertissements.length > 0 ? avertissements : undefined,
+      success: false,
+      status: outcome.status,
+      message: outcome.message ?? 'No feasible assignment exists for this input.',
+      totalScore: 0,
+      statistics: { totalStudents: data.students.length, choiceDistribution: emptyDistribution },
+      byClassroom: {},
+      byWorkshop: {},
+      warnings: warnings.length > 0 ? warnings : undefined,
     };
   }
 
-  const atelierParId = new Map(donnees.ateliers.map((a) => [a.id, a]));
+  const workshopById = new Map(data.workshops.map((w) => [w.id, w]));
 
-  const distributionVoeux = { voeu1: 0, voeu2: 0, voeu3: 0, horsVoeux: 0 };
-  let scoreTotal = 0;
+  const choiceDistribution = { ...emptyDistribution };
+  let totalScore = 0;
 
-  const parClasse: OutputResult['parClasse'] = {};
-  const parAtelier: OutputResult['parAtelier'] = {};
+  const byClassroom: AssignmentResult['byClassroom'] = {};
+  const byWorkshop: AssignmentResult['byWorkshop'] = {};
 
-  for (const eleve of donnees.eleves) {
-    const atelierId = resultat.affectations.get(eleve.id);
-    const atelier = atelierId ? atelierParId.get(atelierId) : undefined;
-    if (!atelier) continue;
+  for (const student of data.students) {
+    const workshopId = outcome.assignments.get(student.id);
+    const workshop = workshopId ? workshopById.get(workshopId) : undefined;
+    if (!workshop) continue;
 
-    let rangVoeuSatisfait: number | null = null;
-    const rangIndex = eleve.voeuxIds.findIndex((v) => v === atelierId);
-    if (rangIndex !== -1) {
-      rangVoeuSatisfait = rangIndex + 1;
-      scoreTotal += donnees.options.poidsVoeux[rangIndex] ?? 0;
-      if (rangIndex === 0) distributionVoeux.voeu1 += 1;
-      else if (rangIndex === 1) distributionVoeux.voeu2 += 1;
-      else if (rangIndex === 2) distributionVoeux.voeu3 += 1;
+    let satisfiedChoiceRank: number | null = null;
+    const rankIndex = student.choiceIds.findIndex((choiceId) => choiceId === workshopId);
+    if (rankIndex !== -1) {
+      satisfiedChoiceRank = rankIndex + 1;
+      totalScore += data.options.choiceWeights[rankIndex] ?? 0;
+      if (rankIndex === 0) choiceDistribution.choice1 += 1;
+      else if (rankIndex === 1) choiceDistribution.choice2 += 1;
+      else if (rankIndex === 2) choiceDistribution.choice3 += 1;
     } else {
-      distributionVoeux.horsVoeux += 1;
+      choiceDistribution.unmatched += 1;
     }
 
-    const eleveNom = `${eleve.nom} ${eleve.prenom}`.trim();
+    const studentName = `${student.lastName} ${student.firstName}`.trim();
 
-    (parClasse[eleve.classe] ??= []).push({
-      eleveNom,
-      nom: eleve.nom,
-      prenom: eleve.prenom,
-      atelierNom: atelier.nom,
-      rangVoeuSatisfait,
+    (byClassroom[student.className] ??= []).push({
+      studentName,
+      lastName: student.lastName,
+      firstName: student.firstName,
+      workshopName: workshop.name,
+      satisfiedChoiceRank,
     });
 
-    (parAtelier[atelier.nom] ??= []).push({
-      eleveNom,
-      nom: eleve.nom,
-      prenom: eleve.prenom,
-      classe: eleve.classe,
+    (byWorkshop[workshop.name] ??= []).push({
+      studentName,
+      lastName: student.lastName,
+      firstName: student.firstName,
+      className: student.className,
     });
   }
 
-  const conflitsExclusionsNonResolus =
-    resultat.conflitsNonResolus.length > 0
-      ? resultat.conflitsNonResolus.map((conflit) => ({
-          eleveA: conflit.exclusion.eleveA,
-          eleveB: conflit.exclusion.eleveB,
-          atelier: atelierParId.get(conflit.atelierId)?.nom ?? conflit.atelierId,
+  const unresolvedExclusionConflicts =
+    outcome.conflicts.length > 0
+      ? outcome.conflicts.map((conflict) => ({
+          studentA: conflict.exclusion.studentA,
+          studentB: conflict.exclusion.studentB,
+          workshop: workshopById.get(conflict.workshopId)?.name ?? conflict.workshopId,
         }))
       : undefined;
 
   return {
-    succes: true,
-    statut: resultat.statut,
-    message:
-      resultat.statut === 'FEASIBLE_WITH_CONFLICTS'
-        ? `${resultat.conflitsNonResolus.length} conflit(s) d'exclusion n'ont pas pu être honorés.`
-        : undefined,
-    scoreTotal,
-    statistiques: {
-      nbElevesTotaux: donnees.eleves.length,
-      distributionVoeux,
-    },
-    parClasse,
-    parAtelier,
-    conflitsExclusionsNonResolus,
-    avertissements: avertissements.length > 0 ? avertissements : undefined,
+    success: SUCCESS_STATUSES.has(outcome.status),
+    status: outcome.status,
+    message: outcome.message,
+    totalScore,
+    statistics: { totalStudents: data.students.length, choiceDistribution },
+    byClassroom,
+    byWorkshop,
+    unresolvedExclusionConflicts,
+    warnings: warnings.length > 0 ? warnings : undefined,
   };
 }

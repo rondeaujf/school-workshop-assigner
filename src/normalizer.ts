@@ -1,28 +1,28 @@
 import type {
-  AtelierNormalise,
-  DonneesNormalisees,
-  EleveNormalise,
-  ExclusionNormalisee,
-  InputRawData,
+  AssignmentInput,
+  NormalizedExclusion,
+  NormalizedInput,
+  NormalizedStudent,
+  NormalizedWorkshop,
 } from './types.js';
 
-const POIDS_VOEUX_DEFAUT = [100, 40, 10];
+const DEFAULT_CHOICE_WEIGHTS = [100, 40, 10];
 
-/** Retire les accents et met en forme une chaîne en identifiant compact (snake_case ASCII). */
-export function slug(valeur: string): string {
-  const nettoye = valeur
+/** Strips accents and turns a string into a compact ASCII snake_case identifier. */
+export function slugify(value: string): string {
+  const cleaned = value
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
-  return nettoye || 'x';
+  return cleaned || 'x';
 }
 
-/** Clé de comparaison insensible à la casse, aux accents et aux espaces multiples. */
-function cleComparaison(valeur: string): string {
-  return valeur
+/** Comparison key, insensitive to case, accents, and repeated whitespace. */
+function comparisonKey(value: string): string {
+  return value
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
@@ -30,119 +30,126 @@ function cleComparaison(valeur: string): string {
     .toLowerCase();
 }
 
-function nettoyerEspaces(valeur: string): string {
-  return valeur.trim().replace(/\s+/g, ' ');
+function collapseWhitespace(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
 }
 
-/** Génère un identifiant unique, en suffixant `_2`, `_3`, ... en cas de collision. */
-function idUnique(base: string, compteurs: Map<string, number>): string {
-  const compte = compteurs.get(base) ?? 0;
-  compteurs.set(base, compte + 1);
-  return compte === 0 ? base : `${base}_${compte + 1}`;
+/** Generates a unique ID, appending `_2`, `_3`, ... on collision. */
+function uniqueId(base: string, counters: Map<string, number>): string {
+  const count = counters.get(base) ?? 0;
+  counters.set(base, count + 1);
+  return count === 0 ? base : `${base}_${count + 1}`;
 }
 
 /**
- * Nettoie et normalise les données brutes (potentiellement issues de plusieurs
- * fichiers CSV / classes) en un modèle exploitable par le solveur.
+ * Cleans and normalizes raw input (potentially assembled from several CSV
+ * files / classes) into a model the solver can consume.
  */
-export function normaliserDonnees(input: InputRawData): DonneesNormalisees {
-  const avertissements: string[] = [];
+export function normalizeInput(input: AssignmentInput): NormalizedInput {
+  const warnings: string[] = [];
 
-  // --- Ateliers ------------------------------------------------------------
-  const ateliers: AtelierNormalise[] = [];
-  const nomVersAtelierId = new Map<string, string>();
-  const compteursAtelier = new Map<string, number>();
+  // --- Workshops -----------------------------------------------------------
+  const workshops: NormalizedWorkshop[] = [];
+  const nameToWorkshopId = new Map<string, string>();
+  const workshopCounters = new Map<string, number>();
 
-  for (const brut of input.ateliers) {
-    const nom = nettoyerEspaces(brut.nom);
-    const capaciteMax = Number(brut.capaciteMax);
-    if (!Number.isFinite(capaciteMax) || capaciteMax < 0) {
-      throw new Error(`Capacité invalide pour l'atelier "${nom}": ${JSON.stringify(brut.capaciteMax)}`);
+  for (const raw of input.workshops) {
+    const name = collapseWhitespace(raw.name);
+    const maxCapacity = Number(raw.maxCapacity);
+    if (!Number.isFinite(maxCapacity) || maxCapacity < 0) {
+      throw new Error(`Invalid capacity for workshop "${name}": ${JSON.stringify(raw.maxCapacity)}`);
     }
 
-    const id = idUnique(`at_${slug(nom)}`, compteursAtelier);
-    ateliers.push({ id, nom, capaciteMax });
+    const id = uniqueId(`ws_${slugify(name)}`, workshopCounters);
+    workshops.push({ id, name, maxCapacity });
 
-    const cle = cleComparaison(nom);
-    if (nomVersAtelierId.has(cle)) {
-      avertissements.push(`Nom d'atelier en doublon (ignoré pour le mapping des vœux): "${nom}".`);
+    const key = comparisonKey(name);
+    if (nameToWorkshopId.has(key)) {
+      warnings.push(
+        `Duplicate workshop name "${name}": choices will only ever match the first one declared. ` +
+          `Give each workshop a distinct name if they are meant to be separate.`,
+      );
     } else {
-      nomVersAtelierId.set(cle, id);
+      nameToWorkshopId.set(key, id);
     }
   }
 
-  // --- Élèves ----------------------------------------------------------------
-  const eleves: EleveNormalise[] = [];
-  const compteursEleve = new Map<string, number>();
-  const lookupEleve = new Map<string, string>(); // "classeSlug::nomSlug::prenomSlug" -> premier id trouvé
+  // --- Students --------------------------------------------------------------
+  const students: NormalizedStudent[] = [];
+  const studentCounters = new Map<string, number>();
+  const studentLookup = new Map<string, string>(); // "classSlug::lastSlug::firstSlug" -> first id found
 
-  for (const brut of input.eleves) {
-    const nom = nettoyerEspaces(brut.nom);
-    const prenom = nettoyerEspaces(brut.prenom);
-    const classe = nettoyerEspaces(brut.classe);
-    const identite = `${nom} ${prenom}`.trim();
+  for (const raw of input.students) {
+    const lastName = collapseWhitespace(raw.lastName);
+    const firstName = collapseWhitespace(raw.firstName);
+    const className = collapseWhitespace(raw.className);
+    const displayName = `${lastName} ${firstName}`.trim();
 
-    // classe + nom + prénom : le nom de famille seul ne suffit pas à distinguer des jumeaux.
-    const id = idUnique(`el_${slug(classe)}_${slug(nom)}_${slug(prenom)}`, compteursEleve);
+    // className + lastName + firstName: the family name alone cannot disambiguate twins.
+    const id = uniqueId(
+      `st_${slugify(className)}_${slugify(lastName)}_${slugify(firstName)}`,
+      studentCounters,
+    );
 
-    const voeuxBruts = [brut.voeu1, brut.voeu2, brut.voeu3];
-    const voeuxIds: Array<string | null> = voeuxBruts.map((voeu) => {
-      if (voeu === undefined || voeu === null || !nettoyerEspaces(voeu)) return null;
-      const atelierId = nomVersAtelierId.get(cleComparaison(voeu));
-      if (!atelierId) {
-        avertissements.push(
-          `Vœu "${voeu}" de l'élève "${identite}" (${classe}) ne correspond à aucun atelier connu.`,
+    const rawChoices = [raw.choice1, raw.choice2, raw.choice3];
+    const choiceIds: Array<string | null> = rawChoices.map((choice) => {
+      if (choice === undefined || choice === null || !collapseWhitespace(choice)) return null;
+      const workshopId = nameToWorkshopId.get(comparisonKey(choice));
+      if (!workshopId) {
+        warnings.push(
+          `Choice "${choice}" for student "${displayName}" (${className}) does not match any known workshop.`,
         );
         return null;
       }
-      return atelierId;
+      return workshopId;
     });
 
-    if (voeuxIds.every((v) => v === null)) {
-      avertissements.push(`L'élève "${identite}" (${classe}) n'a aucun vœu valide reconnu.`);
+    if (choiceIds.every((c) => c === null)) {
+      warnings.push(`Student "${displayName}" (${className}) has no valid recognized choice.`);
     }
 
-    eleves.push({ id, nom, prenom, classe, voeuxIds });
+    students.push({ id, lastName, firstName, className, choiceIds });
 
-    const cleLookup = `${slug(classe)}::${slug(nom)}::${slug(prenom)}`;
-    if (!lookupEleve.has(cleLookup)) {
-      lookupEleve.set(cleLookup, id);
+    const lookupKey = `${slugify(className)}::${slugify(lastName)}::${slugify(firstName)}`;
+    if (!studentLookup.has(lookupKey)) {
+      studentLookup.set(lookupKey, id);
     }
   }
 
-  // --- Exclusions --------------------------------------------------------
-  const exclusions: ExclusionNormalisee[] = [];
-  for (const brut of input.exclusions ?? []) {
-    const cleA = `${slug(brut.eleveA.classe)}::${slug(brut.eleveA.nom)}::${slug(brut.eleveA.prenom)}`;
-    const cleB = `${slug(brut.eleveB.classe)}::${slug(brut.eleveB.nom)}::${slug(brut.eleveB.prenom)}`;
-    const idA = lookupEleve.get(cleA);
-    const idB = lookupEleve.get(cleB);
+  // --- Exclusions ----------------------------------------------------------
+  const exclusions: NormalizedExclusion[] = [];
+  for (const raw of input.exclusions ?? []) {
+    const keyA = `${slugify(raw.studentA.className)}::${slugify(raw.studentA.lastName)}::${slugify(raw.studentA.firstName)}`;
+    const keyB = `${slugify(raw.studentB.className)}::${slugify(raw.studentB.lastName)}::${slugify(raw.studentB.firstName)}`;
+    const idA = studentLookup.get(keyA);
+    const idB = studentLookup.get(keyB);
 
     if (!idA || !idB) {
-      avertissements.push(
-        `Exclusion ignorée (élève introuvable): "${brut.eleveA.nom} ${brut.eleveA.prenom}" (${brut.eleveA.classe}) / ` +
-          `"${brut.eleveB.nom} ${brut.eleveB.prenom}" (${brut.eleveB.classe}).`,
+      warnings.push(
+        `Exclusion ignored (student not found): "${raw.studentA.lastName} ${raw.studentA.firstName}" (${raw.studentA.className}) / ` +
+          `"${raw.studentB.lastName} ${raw.studentB.firstName}" (${raw.studentB.className}).`,
       );
       continue;
     }
     if (idA === idB) {
-      avertissements.push(
-        `Exclusion ignorée (les deux membres désignent le même élève): "${brut.eleveA.nom} ${brut.eleveA.prenom}" (${brut.eleveA.classe}).`,
+      warnings.push(
+        `Exclusion ignored (both sides refer to the same student): "${raw.studentA.lastName} ${raw.studentA.firstName}" (${raw.studentA.className}).`,
       );
       continue;
     }
 
-    exclusions.push({ eleveAId: idA, eleveBId: idB, eleveA: brut.eleveA, eleveB: brut.eleveB });
+    exclusions.push({ studentAId: idA, studentBId: idB, studentA: raw.studentA, studentB: raw.studentB });
   }
 
-  const poidsVoeux = input.options?.poidsVoeux ?? POIDS_VOEUX_DEFAUT;
+  const choiceWeights = input.options?.choiceWeights ?? DEFAULT_CHOICE_WEIGHTS;
   const strictExclusions = input.options?.strictExclusions ?? true;
+  const confirmedExclusionRelaxation = input.options?.confirmedExclusionRelaxation ?? false;
 
   return {
-    ateliers,
-    eleves,
+    workshops,
+    students,
     exclusions,
-    options: { poidsVoeux, strictExclusions },
-    avertissements,
+    options: { choiceWeights, strictExclusions, confirmedExclusionRelaxation },
+    warnings,
   };
 }
