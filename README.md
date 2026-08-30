@@ -21,11 +21,14 @@ const resultat = await optimiserAffectations({
     { nom: 'Robotique', capaciteMax: 20 },
   ],
   eleves: [
-    { nom: 'Dupont Alice', classe: 'CM2-A', voeu1: 'Théâtre', voeu2: 'Robotique' },
-    { nom: 'Martin Bob', classe: 'CM2-A', voeu1: 'Robotique' },
+    { nom: 'Dupont', prenom: 'Alice', classe: 'CM2-A', voeu1: 'Théâtre', voeu2: 'Robotique' },
+    { nom: 'Martin', prenom: 'Bob', classe: 'CM2-A', voeu1: 'Robotique' },
   ],
   exclusions: [
-    { eleveA: { nom: 'Dupont Alice', classe: 'CM2-A' }, eleveB: { nom: 'Martin Bob', classe: 'CM2-A' } },
+    {
+      eleveA: { nom: 'Dupont', prenom: 'Alice', classe: 'CM2-A' },
+      eleveB: { nom: 'Martin', prenom: 'Bob', classe: 'CM2-A' },
+    },
   ],
   options: {
     poidsVoeux: [100, 40, 10],
@@ -48,7 +51,7 @@ await optimiserAffectations(input, {
 
 ## Comportement
 
-- **Normalisation tolérante** : les noms d'ateliers et les vœux sont comparés en ignorant la casse, les accents et les espaces superflus. Chaque élève reçoit un identifiant composite unique `el_<classe>_<nom>`, ce qui permet de fusionner plusieurs classes/CSV sans collision.
+- **Normalisation tolérante** : les noms d'ateliers et les vœux sont comparés en ignorant la casse, les accents et les espaces superflus. Chaque élève reçoit un identifiant composite unique `el_<classe>_<nom>_<prenom>` — le nom de famille seul n'étant pas fiable en cas de jumeaux ou d'homonymes dans une même classe, le prénom fait partie de la clé. Ce même triplet (classe, nom, prénom) sert aussi à résoudre les exclusions.
 - **Validation préalable** : si la capacité totale des ateliers est inférieure au nombre d'élèves, `optimiserAffectations` lève une `ErreurCoherence` avec le détail des chiffres (`capaciteTotale`, `nbEleves`, `deficit`). Les vœux non reconnus ou les élèves sans vœu valide génèrent des avertissements (champ `avertissements` de la sortie), sans bloquer le calcul.
 - **Exclusions** :
   - `strictExclusions: true` (défaut) : les paires exclues ne peuvent jamais partager un atelier. Si cela rend le problème infaisable, le module relâche automatiquement la contrainte en pénalité forte et renvoie le statut `FEASIBLE_WITH_CONFLICTS` avec la liste des paires n'ayant pas pu être séparées (`conflitsExclusionsNonResolus`).

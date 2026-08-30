@@ -8,7 +8,10 @@ export interface AtelierInput {
 }
 
 export interface EleveInput {
+  /** Nom de famille, ex: "Dupont". */
   nom: string;
+  /** Prénom, ex: "Alice". Requis pour distinguer les jumeaux/homonymes d'une même classe. */
+  prenom: string;
   classe: string;
   voeu1?: string;
   voeu2?: string;
@@ -17,6 +20,7 @@ export interface EleveInput {
 
 export interface EleveRef {
   nom: string;
+  prenom: string;
   classe: string;
 }
 
@@ -53,8 +57,10 @@ export interface AtelierNormalise {
 }
 
 export interface EleveNormalise {
+  /** Identifiant composite unique: `el_<classe>_<nom>_<prenom>` (distingue les jumeaux). */
   id: string;
   nom: string;
+  prenom: string;
   classe: string;
   /** IDs d'ateliers alignés sur [voeu1, voeu2, voeu3, ...], `null` si absent ou non reconnu. */
   voeuxIds: Array<string | null>;
@@ -97,13 +103,18 @@ export class ErreurCoherence extends Error {
 export type Statut = 'OPTIMAL' | 'FEASIBLE' | 'FEASIBLE_WITH_CONFLICTS' | 'INFEASIBLE';
 
 export interface AffectationParClasse {
+  /** Nom complet affiché, ex: "Dupont Alice". */
   eleveNom: string;
+  nom: string;
+  prenom: string;
   atelierNom: string;
   rangVoeuSatisfait: number | null;
 }
 
 export interface AffectationParAtelier {
   eleveNom: string;
+  nom: string;
+  prenom: string;
   classe: string;
 }
 
