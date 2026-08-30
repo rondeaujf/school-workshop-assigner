@@ -1,8 +1,6 @@
 # school-workshop-assigner
 
-Module NPM autonome (Node.js & navigateur) pour résoudre l'affectation d'élèves à des ateliers sous contraintes de capacités et d'exclusions, en s'appuyant sur le solveur [HiGHS](https://highs.dev) compilé en WebAssembly (paquet [`highs`](https://www.npmjs.com/package/highs)).
-
-Conçu pour des saisies CSV hétérogènes et multi-classes (une entrée par classe, fusionnées avant l'optimisation).
+Fair, capacity- and exclusion-aware assignment of students to workshops, for a teacher-facing web app with **no backend**: all solving happens client-side via [HiGHS](https://highs.dev) compiled to WebAssembly ([`highs`](https://www.npmjs.com/package/highs) package). Designed for messy, multi-class CSV input (one file per class, merged before optimization).
 
 ## Installation
 
@@ -10,69 +8,125 @@ Conçu pour des saisies CSV hétérogènes et multi-classes (une entrée par cla
 npm install school-workshop-assigner
 ```
 
-## Utilisation
+## Quick start
 
 ```ts
-import { optimiserAffectations } from 'school-workshop-assigner';
+import { assignStudentsToWorkshops } from 'school-workshop-assigner';
 
-const resultat = await optimiserAffectations({
-  ateliers: [
-    { nom: 'Théâtre', capaciteMax: 25 },
-    { nom: 'Robotique', capaciteMax: 20 },
+const result = await assignStudentsToWorkshops({
+  workshops: [
+    { name: 'Theater', maxCapacity: 25 },
+    { name: 'Robotics', maxCapacity: 20 },
   ],
-  eleves: [
-    { nom: 'Dupont', prenom: 'Alice', classe: 'CM2-A', voeu1: 'Théâtre', voeu2: 'Robotique' },
-    { nom: 'Martin', prenom: 'Bob', classe: 'CM2-A', voeu1: 'Robotique' },
+  students: [
+    { lastName: 'Dupont', firstName: 'Alice', className: 'CM2-A', choice1: 'Theater', choice2: 'Robotics' },
+    { lastName: 'Martin', firstName: 'Bob', className: 'CM2-A', choice1: 'Robotics' },
   ],
   exclusions: [
     {
-      eleveA: { nom: 'Dupont', prenom: 'Alice', classe: 'CM2-A' },
-      eleveB: { nom: 'Martin', prenom: 'Bob', classe: 'CM2-A' },
+      studentA: { lastName: 'Dupont', firstName: 'Alice', className: 'CM2-A' },
+      studentB: { lastName: 'Martin', firstName: 'Bob', className: 'CM2-A' },
     },
   ],
-  options: {
-    poidsVoeux: [100, 40, 10],
-    strictExclusions: true,
-  },
 });
 
-console.log(resultat.statut, resultat.scoreTotal);
-console.log(resultat.parClasse);
-console.log(resultat.parAtelier);
+console.log(result.status, result.totalScore);
+console.log(result.byClassroom);
+console.log(result.byWorkshop);
 ```
 
-Dans un navigateur, si le fichier `.wasm` de HiGHS n'est pas servi à côté du bundle JS, indiquez son emplacement via le deuxième paramètre :
+In a browser, if the HiGHS `.wasm` asset isn't served next to your JS bundle, point to it via the second parameter:
 
 ```ts
-await optimiserAffectations(input, {
+await assignStudentsToWorkshops(input, {
   locateFile: (file) => `/assets/${file}`,
 });
 ```
 
-## Comportement
+## Input contract
 
-- **Normalisation tolérante** : les noms d'ateliers et les vœux sont comparés en ignorant la casse, les accents et les espaces superflus. Chaque élève reçoit un identifiant composite unique `el_<classe>_<nom>_<prenom>` — le nom de famille seul n'étant pas fiable en cas de jumeaux ou d'homonymes dans une même classe, le prénom fait partie de la clé. Ce même triplet (classe, nom, prénom) sert aussi à résoudre les exclusions.
-- **Validation préalable** : si la capacité totale des ateliers est inférieure au nombre d'élèves, `optimiserAffectations` lève une `ErreurCoherence` avec le détail des chiffres (`capaciteTotale`, `nbEleves`, `deficit`). Les vœux non reconnus ou les élèves sans vœu valide génèrent des avertissements (champ `avertissements` de la sortie), sans bloquer le calcul.
-- **Exclusions** :
-  - `strictExclusions: true` (défaut) : les paires exclues ne peuvent jamais partager un atelier. Si cela rend le problème infaisable, le module relâche automatiquement la contrainte en pénalité forte et renvoie le statut `FEASIBLE_WITH_CONFLICTS` avec la liste des paires n'ayant pas pu être séparées (`conflitsExclusionsNonResolus`).
-  - `strictExclusions: false` : les exclusions sont directement traitées comme des pénalités fortes dans la fonction objectif.
-- **Score** : chaque vœu satisfait rapporte les points définis par `poidsVoeux` (défaut `[100, 40, 10]`), utilisés à la fois comme rangs (voeu1/voeu2/voeu3) et comme poids d'objectif.
+This module does **not** parse CSV itself — it expects plain JS objects, however you assembled them (one `Papa.parse()` call per uploaded class file, then concatenated). Here is exactly what it expects and tolerates:
+
+### `workshops: WorkshopInput[]`
+- `name: string` — must be distinct after normalization (trimmed, case/accent-insensitive). Two workshops that normalize to the same name are **not** merged: both are kept as separate workshops with separate capacities, but any student choice referencing that name will only ever match the *first* one declared, and the module emits a warning. If you genuinely run two parallel sessions of the same activity, give them distinct names (e.g. "Theater (room 1)" / "Theater (room 2)").
+- `maxCapacity: number | string` — a non-negative number, or a numeric string (raw CSV cells are strings; this module coerces them). A non-numeric value throws.
+
+### `students: StudentInput[]`
+- `lastName`, `firstName`, `className: string` — all three are required and together form the student's identity. **The family name alone is not treated as unique** — twins or siblings sharing a class and last name are only disambiguated because `firstName` is part of the internal composite ID (`st_<className>_<lastName>_<firstName>`). Leading/trailing spaces and repeated internal whitespace are trimmed; case and accents are ignored when *matching* names, but the original casing is preserved in the output.
+- `choice1?`, `choice2?`, `choice3?: string` — the workshop name as typed by the student/teacher. Matched against `WorkshopInput.name` case/accent/whitespace-insensitively (`"théâtre "` matches `"Théâtre"`). A choice that doesn't match any known workshop is dropped with a warning (the student is simply not credited for that rank). A student with zero recognized choices is still assigned (to whichever workshop has room) and gets a warning plus `satisfiedChoiceRank: null`.
+
+### `exclusions?: ExclusionInput[]`
+- Each entry names two students via `{ lastName, firstName, className }` — the same triplet used to build student IDs. If either side doesn't match any known student, the exclusion is dropped with a warning (not an error), so a typo doesn't abort the whole run.
+- An exclusion where both sides resolve to the same student is dropped with a warning.
+
+### `options?: AssignmentOptions`
+- `choiceWeights?: number[]` (default `[100, 40, 10]`) — used **only** to compute the informational `totalScore` summary; see "Fairness model" below for why it does not drive the actual optimization.
+- `strictExclusions?: boolean` (default `true`) — see "Exclusion conflicts" below.
+- `confirmedExclusionRelaxation?: boolean` (default `false`) — see "Exclusion conflicts" below.
+
+### Preconditions checked before solving
+Before any solving happens, `assignStudentsToWorkshops` throws a `CoherenceError` (a data problem for the caller to fix, not a solver outcome) if:
+- there are no workshops at all, or
+- total capacity across all workshops is less than the number of students (`error.details` gives `{ totalCapacity, studentCount, shortfall }`).
+
+Everything else — unrecognized choices, students with no valid choice, exclusions referencing unknown students, duplicate workshop names — is non-blocking and surfaces in the returned `warnings` array instead.
+
+## Fairness model
+
+Maximizing a single weighted sum of satisfied choices can be gamed by the optimizer in ways a human wouldn't consider fair: it might fully sacrifice a handful of students (giving them none of their choices) to squeeze out a marginally higher total score elsewhere, or it might arbitrarily dump every unlucky "no choice available" student into a single class purely because the solver was indifferent between equally-scoring solutions.
+
+To avoid that, this module optimizes in **strict priority order** (a lexicographic cascade — see `src/solver.ts` for the exact stages), never trading a higher-priority outcome for a lower-priority one:
+
+1. Maximize the number of students who get their 1st choice.
+2. ...then, without giving up any of that, maximize the number who get their 1st **or** 2nd choice.
+3. ...then, without giving up any of that, maximize the number who get any of their 3 choices.
+4. ...then, without giving up any of that, minimize the **largest number of "no choice satisfied" students concentrated in any single class** — so leftover seats aren't systematically dumped on one class over another.
+
+`totalScore` (computed from `choiceWeights`) is reported purely as a human-readable summary of the final result — it is not what the solver optimizes for.
+
+This is a per-run fairness model: it treats every run as a clean slate. If you re-run this tool regularly (e.g. once a term), consider tracking which students were left unmatched in previous runs and pre-processing the input to give them priority — this module currently has no notion of history across calls.
+
+## Exclusion conflicts
+
+By default (`strictExclusions: true`), an exclusion is a hard constraint: two excluded students can never end up in the same workshop. Two students being kept apart can be a mundane preference or something a lot more serious (a safety separation), so **this module never silently decides for you which pair to expose to a conflict** when honoring every exclusion is mathematically impossible given capacities.
+
+Instead, the call returns:
+
+```ts
+{ success: false, status: 'NEEDS_CONFIRMATION', unresolvedExclusionConflicts: [...], byClassroom: {/* preview */}, ... }
+```
+
+`byClassroom`/`byWorkshop` are already populated with the actual best-effort resolution (fewest possible conflicts, then still fairness-optimized), so a UI can show "here's what would happen" before asking a human to confirm. Once approved, call again with the same input plus:
+
+```ts
+options: { confirmedExclusionRelaxation: true }
+```
+
+to commit to that exact result (`status: 'FEASIBLE_WITH_CONFLICTS'`).
+
+If you have no human in the loop (e.g. a scheduled/CI run) and are fine resolving conflicts automatically, set `options: { strictExclusions: false }` to skip the confirmation step entirely and get the best-effort result on the first call.
+
+## Error handling
+
+Two deliberately different mechanisms:
+- **Throws** (`CoherenceError`): structurally invalid input — the caller made a data mistake and must fix it before retrying. See "Preconditions checked before solving" above.
+- **Returns** (`AssignmentResult` with `success: false`): legitimate solver outcomes that a UI needs to render to the end user — `INFEASIBLE` (no assignment exists even ignoring exclusions — should not happen once coherence has been validated, but reported defensively) and `NEEDS_CONFIRMATION` (see above).
 
 ## Structure
 
 ```
 src/
-  index.ts       # API publique (optimiserAffectations)
-  normalizer.ts  # Nettoyage, slugs, fuzzy-matching, gestion multi-classes
-  validator.ts   # Vérifications d'intégrité pré-calcul
-  solver.ts       # Génération du modèle LP (format CPLEX) et appel de HiGHS
-  types.ts       # Interfaces TypeScript (entrée/sortie)
+  index.ts       # Public API (assignStudentsToWorkshops)
+  normalizer.ts  # Cleanup, slugs, fuzzy matching, multi-class merging
+  validator.ts   # Pre-solve integrity checks
+  solver.ts      # LP model generation (CPLEX format) + lexicographic cascade over HiGHS
+  types.ts       # TypeScript interfaces (input/output)
 tests/
-  multi-class.test.ts    # 250 élèves / 10 classes / 10 ateliers, < 500 ms
-  fuzzy-matching.test.ts # Tolérance casse/espaces/accents dans le CSV
+  assignment.test.ts    # End-to-end: scale, coherence, exclusion confirmation flow, fairness
+  normalization.test.ts # Fuzzy matching, twins, exclusion resolution
 ```
 
-## Développement
+## Development
 
 ```bash
 npm install
@@ -80,3 +134,10 @@ npm run build      # compile src/ -> dist/
 npm run typecheck
 npm test           # vitest run
 ```
+
+## Design notes / known limitations
+
+- **No backend, by design**: everything runs in the browser via WebAssembly. This does mean shipping the `highs` WASM binary (a few MB) to the client; if this module is ever used behind a backend, a native (non-WASM) HiGHS binding would avoid that cost.
+- **`highs` is pinned to an exact version** (not a semver range) in `package.json`. Its `types.d.ts` doesn't export the shapes this module reads from `.solve()`, so those types are derived structurally rather than from a documented contract — pinning turns any upstream shape change into an explicit, reviewed version bump instead of silent drift.
+- **Duplicate workshop names are not merged** (see "Input contract" above) — this is a deliberate choice to avoid silently combining capacities that might belong to two genuinely different sessions.
+- **No cross-run fairness/history** — see "Fairness model" above.

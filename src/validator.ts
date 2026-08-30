@@ -1,27 +1,26 @@
-import { ErreurCoherence, type DonneesNormalisees } from './types.js';
+import { CoherenceError, type NormalizedInput } from './types.js';
 
 /**
- * Vérifie la cohérence globale des données normalisées avant de lancer le
- * solveur. Lève une {@link ErreurCoherence} pour les problèmes bloquants
- * (capacité insuffisante, aucun atelier) et retourne la liste des
- * avertissements non bloquants (vœux non reconnus, etc.) accumulés pendant
- * la normalisation.
+ * Checks the overall coherence of normalized data before invoking the
+ * solver. Throws a {@link CoherenceError} for blocking issues (insufficient
+ * capacity, no workshops) and returns the non-blocking warnings accumulated
+ * during normalization (unrecognized choices, etc).
  */
-export function verifierCoherence(donnees: DonneesNormalisees): string[] {
-  if (donnees.ateliers.length === 0) {
-    throw new ErreurCoherence('Aucun atelier fourni.', { nbAteliers: 0 });
+export function validateCoherence(data: NormalizedInput): string[] {
+  if (data.workshops.length === 0) {
+    throw new CoherenceError('No workshops provided.', { workshopCount: 0 });
   }
 
-  const capaciteTotale = donnees.ateliers.reduce((somme, a) => somme + a.capaciteMax, 0);
-  const nbEleves = donnees.eleves.length;
+  const totalCapacity = data.workshops.reduce((sum, w) => sum + w.maxCapacity, 0);
+  const studentCount = data.students.length;
 
-  if (capaciteTotale < nbEleves) {
-    throw new ErreurCoherence(
-      `Capacité totale insuffisante: ${capaciteTotale} places disponibles pour ${nbEleves} élèves ` +
-        `(déficit de ${nbEleves - capaciteTotale} place(s)).`,
-      { capaciteTotale, nbEleves, deficit: nbEleves - capaciteTotale },
+  if (totalCapacity < studentCount) {
+    throw new CoherenceError(
+      `Insufficient total capacity: ${totalCapacity} seat(s) available for ${studentCount} student(s) ` +
+        `(short by ${studentCount - totalCapacity}).`,
+      { totalCapacity, studentCount, shortfall: studentCount - totalCapacity },
     );
   }
 
-  return [...donnees.avertissements];
+  return [...data.warnings];
 }
