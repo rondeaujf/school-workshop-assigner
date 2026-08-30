@@ -1,0 +1,64 @@
+lastNameA,firstNameA,classNameA,lastNameB,firstNameB,classNameB
+Brillouin,Marcel,Solvay 1911,Barthez,Fabien,France 98
+Brillouin,Marcel,Solvay 1911,Blanc,Laurent,France 98
+Brillouin,Marcel,Solvay 1911,Boghossian,Alain,France 98
+Barthez,Fabien,France 98,Blanc,Laurent,France 98
+Barthez,Fabien,France 98,Boghossian,Alain,France 98
+Blanc,Laurent,France 98,Boghossian,Alain,France 98
+Solvay,Ernest,Solvay 1911,Sommerfeld,Arnold,Solvay 1911
+Lorentz,Hendrik,Solvay 1911,Lindemann,Frederick,Solvay 1911
+Lorentz,Hendrik,Solvay 1911,Langevin,Paul,Solvay 1911
+Lorentz,Hendrik,Solvay 1911,Lama,Bernard,France 98
+Lorentz,Hendrik,Solvay 1911,Lizarazu,Bixente,France 98
+Lorentz,Hendrik,Solvay 1911,Leboeuf,Frank,France 98
+Lindemann,Frederick,Solvay 1911,Langevin,Paul,Solvay 1911
+Lindemann,Frederick,Solvay 1911,Lama,Bernard,France 98
+Lindemann,Frederick,Solvay 1911,Lizarazu,Bixente,France 98
+Lindemann,Frederick,Solvay 1911,Leboeuf,Frank,France 98
+Langevin,Paul,Solvay 1911,Lama,Bernard,France 98
+Langevin,Paul,Solvay 1911,Lizarazu,Bixente,France 98
+Langevin,Paul,Solvay 1911,Leboeuf,Frank,France 98
+Lama,Bernard,France 98,Lizarazu,Bixente,France 98
+Lama,Bernard,France 98,Leboeuf,Frank,France 98
+Lizarazu,Bixente,France 98,Leboeuf,Frank,France 98
+Warburg,Emil,Solvay 1911,Wien,Wilhelm,Solvay 1911
+Perrin,Jean,Solvay 1911,Poincaré,Henri,Solvay 1911
+Perrin,Jean,Solvay 1911,Planck,Max,Solvay 1911
+Perrin,Jean,Solvay 1911,Petit,Emmanuel,France 98
+Perrin,Jean,Solvay 1911,Pirès,Robert,France 98
+Poincaré,Henri,Solvay 1911,Planck,Max,Solvay 1911
+Poincaré,Henri,Solvay 1911,Petit,Emmanuel,France 98
+Poincaré,Henri,Solvay 1911,Pirès,Robert,France 98
+Planck,Max,Solvay 1911,Petit,Emmanuel,France 98
+Planck,Max,Solvay 1911,Pirès,Robert,France 98
+Petit,Emmanuel,France 98,Pirès,Robert,France 98
+Curie,Marie,Solvay 1911,Charbonnier,Lionel,France 98
+Curie,Marie,Solvay 1911,Candela,Vincent,France 98
+Charbonnier,Lionel,France 98,Candela,Vincent,France 98
+Goldschmidt,Robert,Solvay 1911,Guivarc'h,Stéphane,France 98
+Rubens,Heinrich,Solvay 1911,Rutherford,Ernest,Solvay 1911
+de Broglie,Maurice,Solvay 1911,Desailly,Marcel,France 98
+de Broglie,Maurice,Solvay 1911,Deschamps,Didier,France 98
+de Broglie,Maurice,Solvay 1911,Djorkaeff,Youri,France 98
+de Broglie,Maurice,Solvay 1911,Diomède,Bernard,France 98
+de Broglie,Maurice,Solvay 1911,Dugarry,Christophe,France 98
+Desailly,Marcel,France 98,Deschamps,Didier,France 98
+Desailly,Marcel,France 98,Djorkaeff,Youri,France 98
+Desailly,Marcel,France 98,Diomède,Bernard,France 98
+Desailly,Marcel,France 98,Dugarry,Christophe,France 98
+Deschamps,Didier,France 98,Djorkaeff,Youri,France 98
+Deschamps,Didier,France 98,Diomède,Bernard,France 98
+Deschamps,Didier,France 98,Dugarry,Christophe,France 98
+Djorkaeff,Youri,France 98,Diomède,Bernard,France 98
+Djorkaeff,Youri,France 98,Dugarry,Christophe,France 98
+Diomède,Bernard,France 98,Dugarry,Christophe,France 98
+Knudsen,Martin,Solvay 1911,Kamerlingh Onnes,Heike,Solvay 1911
+Knudsen,Martin,Solvay 1911,Karembeu,Christian,France 98
+Kamerlingh Onnes,Heike,Solvay 1911,Karembeu,Christian,France 98
+Hasenöhrl,Friedrich,Solvay 1911,Hostelet,Georges,Solvay 1911
+Hasenöhrl,Friedrich,Solvay 1911,Herzen,Édouard,Solvay 1911
+Hasenöhrl,Friedrich,Solvay 1911,Henry,Thierry,France 98
+Hostelet,Georges,Solvay 1911,Herzen,Édouard,Solvay 1911
+Hostelet,Georges,Solvay 1911,Henry,Thierry,France 98
+Herzen,Édouard,Solvay 1911,Henry,Thierry,France 98
+Thuram,Lilian,France 98,Trezeguet,David,France 98
