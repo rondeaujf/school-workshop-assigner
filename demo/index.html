@@ -86,10 +86,33 @@
       <div class="presets">
         <button id="preset-fairness">Load preset: fairness + twins</button>
         <button id="preset-conflict">Load preset: exclusion conflict</button>
+        <button id="preset-solvay">Load sample: Solvay 1911 vs France 98 (CSV)</button>
       </div>
 
       <fieldset>
-        <legend>Input</legend>
+        <legend>Import CSV</legend>
+        <p class="empty-hint">
+          Sample files to try: <code>demo/samples/*.csv</code> (or click the preset button above to
+          load them automatically). Same columns as the JSON fields below:
+          workshops → <code>name,maxCapacity</code>; each class →
+          <code>lastName,firstName,className,choice1,choice2,choice3</code>; exclusions →
+          <code>lastNameA,firstNameA,classNameA,lastNameB,firstNameB,classNameB</code>.
+        </p>
+
+        <label for="workshops-csv">Workshops CSV</label>
+        <input type="file" id="workshops-csv" accept=".csv,text/csv" />
+
+        <label for="class-csv">Add a class (CSV) — pick one file per class, repeat to add more</label>
+        <input type="file" id="class-csv" accept=".csv,text/csv" />
+        <ul id="loaded-classes" class="warnings" style="list-style: none; padding-left: 0;"></ul>
+        <button id="clear-classes">Clear all loaded classes</button>
+
+        <label for="exclusions-csv">Exclusions CSV (optional)</label>
+        <input type="file" id="exclusions-csv" accept=".csv,text/csv" />
+      </fieldset>
+
+      <fieldset>
+        <legend>Input (JSON — reflects the CSV imports above, or edit directly)</legend>
         <label for="workshops">workshops (JSON array)</label>
         <textarea id="workshops" rows="6"></textarea>
 
