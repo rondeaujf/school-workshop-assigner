@@ -75,15 +75,22 @@ const classes = [
 ];
 
 // --- Workshops ---------------------------------------------------------------
+// Capacities scaled down from an initial, too-generous draft (which summed to
+// 129 seats for 46 students — barely any contention) to sum to exactly the
+// total student count, so every seat matters and the exclusion/fairness
+// machinery is actually put under pressure. Scaled proportionally from the
+// original relative sizes (Football 22, Juggling 22, Fluid Mechanics 30,
+// Field Theory 17, Organic Chemistry 12, Sliding Tackles 11, Refereeing 6,
+// Third Half 9 — factor 46/129), then rounded.
 const workshops = [
-  { name: 'Football', maxCapacity: 22 },
-  { name: 'Juggling', maxCapacity: 22 },
-  { name: 'Fluid Mechanics', maxCapacity: 30 },
-  { name: 'Field Theory', maxCapacity: 17 },
-  { name: 'Organic Chemistry', maxCapacity: 12 },
-  { name: 'Sliding Tackles', maxCapacity: 11 },
-  { name: 'Refereeing', maxCapacity: 6 },
-  { name: 'Third Half', maxCapacity: 9 },
+  { name: 'Football', maxCapacity: 8 },
+  { name: 'Juggling', maxCapacity: 8 },
+  { name: 'Fluid Mechanics', maxCapacity: 11 },
+  { name: 'Field Theory', maxCapacity: 6 },
+  { name: 'Organic Chemistry', maxCapacity: 4 },
+  { name: 'Sliding Tackles', maxCapacity: 4 },
+  { name: 'Refereeing', maxCapacity: 2 },
+  { name: 'Third Half', maxCapacity: 3 },
 ];
 
 // --- Deterministic PRNG (mulberry32) so "random" choices are reproducible ---
