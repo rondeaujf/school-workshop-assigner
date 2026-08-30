@@ -1,0 +1,47 @@
+{
+  "name": "school-workshop-assigner",
+  "version": "0.2.0",
+  "description": "Fair, capacity- and exclusion-aware assignment of students to workshops (multi-class, tolerant of messy CSV input), powered by the HiGHS solver (WebAssembly).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build:demo": "npm run build && rm -rf demo/vendor && mkdir -p demo/vendor/highs && cp -r dist demo/vendor/school-workshop-assigner && cp node_modules/highs/build/highs.js node_modules/highs/build/highs.wasm demo/vendor/highs/",
+    "demo": "npm run build:demo && npx serve demo"
+  },
+  "keywords": [
+    "optimization",
+    "linear-programming",
+    "highs",
+    "school",
+    "assignment",
+    "fairness"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "highs": "1.15.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
