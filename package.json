@@ -1,6 +1,6 @@
 {
   "name": "school-workshop-assigner",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Fair, capacity- and exclusion-aware assignment of students to workshops (multi-class, tolerant of messy CSV input), powered by the HiGHS solver (WebAssembly).",
   "type": "module",
   "main": "./dist/index.js",
@@ -40,7 +40,16 @@
     "assignment",
     "fairness"
   ],
-  "license": "MIT",
+  "author": "J.-F. Rondeau",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rondeaujf/school-workshop-assigner.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rondeaujf/school-workshop-assigner/issues"
+  },
+  "homepage": "https://jfrondeau.fr/projects/school-workshop-assigner",
   "dependencies": {
     "highs": "1.15.2"
   },
