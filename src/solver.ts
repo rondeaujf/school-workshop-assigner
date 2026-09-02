@@ -1,23 +1,99 @@
-import highsLoader from 'highs';
-import type { AssignmentStatus, HighsLoaderOptions, NormalizedExclusion, NormalizedInput } from './types.js';
-
-// The `highs` package's `types.d.ts` does not export its internal `Highs` /
-// `HighsSolution` types (they're file-local declarations shadowed by the
-// module boundary), so we derive them structurally from the loader's own
-// signature instead of re-declaring them by hand. This is coupled to the
-// package's actual runtime shape rather than a documented contract, which is
-// why the dependency is pinned to an exact version in package.json — any
-// upstream shape change is then an explicit, reviewed version bump instead of
-// a silent drift.
-type Highs = Awaited<ReturnType<typeof highsLoader>>;
-type HighsSolution = ReturnType<Highs['solve']>;
-
-function isInfeasible(status: string): boolean {
-  return status.toLowerCase().includes('infeasible');
-}
+import { loadSolver, type SolveOutcome, type SolverEngine } from './highs-adapter.js';
+import type { AssignmentStatus, NormalizedExclusion, NormalizedInput, SolverOptions } from './types.js';
 
 function sumExpr(names: string[]): string | null {
   return names.length > 0 ? names.join(' + ') : null;
+}
+
+/** A usable solve is one that produced a primal assignment (optimal, or a
+ * time-limited incumbent). Infeasible / errored / empty solves are not. */
+function isUsable(outcome: SolveOutcome): boolean {
+  return outcome.hasSolution && outcome.status !== 'infeasible';
+}
+
+// ---------------------------------------------------------------------------
+// Candidate workshops per student
+//
+// The natural model has one binary x_ij for every (student, workshop) pair.
+// Most of those are dead weight: a student only ever wants one of their (up to)
+// 3 chosen workshops, and the cascade re-parses the whole model 4-5 times. We
+// therefore try a REDUCED model first, where a student's variables are limited
+// to their chosen workshops (students with no valid choice keep every workshop,
+// since they can legitimately land anywhere). That can make the model
+// infeasible when a student's chosen workshops are all full, so a single cheap
+// feasibility probe decides: reduced if it admits a full assignment, otherwise
+// fall back to the exact full model.
+//
+// This is only applied when there are NO exclusions. With exclusions, routing a
+// student through an *unchosen* workshop can be exactly what honors a
+// separation (or removes a conflict), so pruning to chosen-only workshops could
+// produce a needlessly infeasible hard model — or a worse-than-necessary
+// NEEDS_CONFIRMATION / conflict count. Not worth the risk on the machinery that
+// is the whole point of the library.
+// ---------------------------------------------------------------------------
+
+type CandidateSets = number[][]; // student index -> ascending workshop indices
+
+function fullCandidates(data: NormalizedInput): CandidateSets {
+  const all = data.workshops.map((_, j) => j);
+  return data.students.map(() => all);
+}
+
+function reducedCandidates(data: NormalizedInput): CandidateSets {
+  const workshopIndexById = new Map(data.workshops.map((w, j) => [w.id, j]));
+  const all = data.workshops.map((_, j) => j);
+  return data.students.map((student) => {
+    const chosen = new Set<number>();
+    for (const workshopId of student.choiceIds) {
+      if (!workshopId) continue;
+      const j = workshopIndexById.get(workshopId);
+      if (j !== undefined) chosen.add(j);
+    }
+    if (chosen.size === 0) return all; // no recognized choice -> may go anywhere
+    return [...chosen].sort((a, b) => a - b);
+  });
+}
+
+function assembleFeasibilityLp(data: NormalizedInput, candidates: CandidateSets): string {
+  const constraints: string[] = [];
+  const binaries: string[] = [];
+
+  data.students.forEach((_, i) => {
+    const names = candidates[i].map((j) => `x_${i}_${j}`);
+    binaries.push(...names);
+    constraints.push(`c_u_${i}: ${names.join(' + ')} = 1`);
+  });
+
+  const studentsByWorkshop: number[][] = data.workshops.map(() => []);
+  candidates.forEach((js, i) => js.forEach((j) => studentsByWorkshop[j].push(i)));
+
+  data.workshops.forEach((workshop, j) => {
+    const names = studentsByWorkshop[j].map((i) => `x_${i}_${j}`);
+    if (names.length > 0) {
+      constraints.push(`c_c_${j}: ${names.join(' + ')} <= ${workshop.maxCapacity}`);
+    }
+  });
+
+  return assembleLP({
+    direction: 'Minimize',
+    objectiveExpr: `0 ${binaries[0]}`,
+    constraints,
+    bounds: [],
+    binaries,
+  });
+}
+
+/** Picks the reduced candidate model when it admits a full assignment, else
+ * the exact full model. Costs at most one extra (cheap) feasibility solve. */
+function chooseCandidates(engine: SolverEngine, data: NormalizedInput): CandidateSets {
+  const full = fullCandidates(data);
+  const reduced = reducedCandidates(data);
+
+  const alreadyFull = reduced.every((js) => js.length === data.workshops.length);
+  if (alreadyFull) return full;
+
+  const probe = engine.solve(assembleFeasibilityLp(data, reduced));
+  return isUsable(probe) ? reduced : full;
 }
 
 // ---------------------------------------------------------------------------
@@ -38,16 +114,18 @@ interface BaseModel {
   bounds: string[];
   /** Conflict indicator variable names per exclusion pair, e.g. `allZByPair[p] = ['z_0_0', 'z_0_1', ...]`. */
   allZByPair: string[][];
+  /** Class name -> student indices, in first-seen order. */
   classGroups: Map<string, number[]>;
 }
 
-function buildBaseModel(data: NormalizedInput, mode: ExclusionMode): BaseModel {
+function buildBaseModel(data: NormalizedInput, mode: ExclusionMode, candidates: CandidateSets): BaseModel {
   const { students, workshops, exclusions } = data;
   const varX = (i: number, j: number) => `x_${i}_${j}`;
   const varZ = (p: number, j: number) => `z_${p}_${j}`;
 
   const workshopIndexById = new Map(workshops.map((w, j) => [w.id, j]));
   const studentIndexById = new Map(students.map((s, i) => [s.id, i]));
+  const candidateSets = candidates.map((js) => new Set(js));
 
   const allXNames: string[] = [];
   const constraints: string[] = [];
@@ -55,13 +133,13 @@ function buildBaseModel(data: NormalizedInput, mode: ExclusionMode): BaseModel {
   const matchedNamesByStudent: string[][] = students.map(() => []);
 
   students.forEach((student, i) => {
-    workshops.forEach((_, j) => allXNames.push(varX(i, j)));
+    candidates[i].forEach((j) => allXNames.push(varX(i, j)));
 
     const matchedForStudent = new Set<string>();
     student.choiceIds.forEach((workshopId, rank) => {
       if (!workshopId || rank > 2) return;
       const j = workshopIndexById.get(workshopId);
-      if (j === undefined) return;
+      if (j === undefined || !candidateSets[i].has(j)) return;
       const name = varX(i, j);
       rankVarNames[rank].push(name);
       matchedForStudent.add(name);
@@ -71,14 +149,18 @@ function buildBaseModel(data: NormalizedInput, mode: ExclusionMode): BaseModel {
 
   // Uniqueness: every student is assigned to exactly one workshop.
   students.forEach((_, i) => {
-    const names = workshops.map((__, j) => varX(i, j));
+    const names = candidates[i].map((j) => varX(i, j));
     constraints.push(`c_u_${i}: ${names.join(' + ')} = 1`);
   });
 
   // Capacity: every workshop respects its maximum headcount.
+  const studentsByWorkshop: number[][] = workshops.map(() => []);
+  candidates.forEach((js, i) => js.forEach((j) => studentsByWorkshop[j].push(i)));
   workshops.forEach((workshop, j) => {
-    const names = students.map((__, i) => varX(i, j));
-    constraints.push(`c_c_${j}: ${names.join(' + ')} <= ${workshop.maxCapacity}`);
+    const names = studentsByWorkshop[j].map((i) => varX(i, j));
+    if (names.length > 0) {
+      constraints.push(`c_c_${j}: ${names.join(' + ')} <= ${workshop.maxCapacity}`);
+    }
   });
 
   const bounds: string[] = [];
@@ -94,7 +176,11 @@ function buildBaseModel(data: NormalizedInput, mode: ExclusionMode): BaseModel {
         return;
       }
 
+      // Only workshops both students can actually be assigned to can host a
+      // conflict; if their candidate sets are disjoint the pair is already
+      // structurally separated and needs no constraint at all.
       workshops.forEach((_, j) => {
+        if (!candidateSets[i].has(j) || !candidateSets[k].has(j)) return;
         if (mode === 'hard') {
           constraints.push(`c_e_${p}_${j}: ${varX(i, j)} + ${varX(k, j)} <= 1`);
         } else {
@@ -155,19 +241,22 @@ function assembleLP(options: {
 // ---------------------------------------------------------------------------
 
 interface CascadeResult {
-  status: string;
-  finalSolution: HighsSolution;
+  status: SolveOutcome['status'];
+  finalOutcome: SolveOutcome;
   model: BaseModel;
+  /** True when at least one stage returned a time-limited (not proven optimal) result. */
+  timedOut: boolean;
 }
 
-async function runCascade(
-  highs: Highs,
+function runCascade(
+  engine: SolverEngine,
   model: BaseModel,
   seedConstraints: string[],
   conflictCap: number | null,
-): Promise<CascadeResult> {
+): CascadeResult {
   const constraints = [...model.constraints, ...seedConstraints];
   const extra: string[] = [];
+  let timedOut = false;
 
   if (conflictCap !== null) {
     const allZ = model.allZByPair.flat();
@@ -175,15 +264,19 @@ async function runCascade(
     if (expr) extra.push(`c_conflict_cap: ${expr} <= ${conflictCap}`);
   }
 
-  let lastSolution: HighsSolution | null = null;
+  let lastOutcome: SolveOutcome | null = null;
   const rankExprs: Array<string | null> = [
     sumExpr(model.rankVarNames[0]),
     sumExpr([...model.rankVarNames[0], ...model.rankVarNames[1]]),
     sumExpr([...model.rankVarNames[0], ...model.rankVarNames[1], ...model.rankVarNames[2]]),
   ];
 
+  // Consecutive ranks collapse to the same expression when no student adds a
+  // choice at that rank — no point re-solving an identical model.
+  let previousExpr: string | null = null;
   for (const expr of rankExprs) {
-    if (!expr) continue; // no student has a valid choice at this rank at all; nothing to optimize
+    if (!expr || expr === previousExpr) continue;
+    previousExpr = expr;
     const lp = assembleLP({
       direction: 'Maximize',
       objectiveExpr: expr,
@@ -191,26 +284,34 @@ async function runCascade(
       bounds: model.bounds,
       binaries: model.allXNames,
     });
-    const solution = highs.solve(lp);
-    lastSolution = solution;
-    if (isInfeasible(solution.Status) || !('Columns' in solution)) {
-      return { status: solution.Status, finalSolution: solution, model };
+    const outcome = engine.solve(lp);
+    lastOutcome = outcome;
+    if (!isUsable(outcome)) {
+      return { status: outcome.status, finalOutcome: outcome, model, timedOut };
     }
-    const value = Math.round(solution.ObjectiveValue);
-    extra.push(`c_floor_${extra.length}: ${expr} >= ${value}`);
+    if (outcome.status === 'timeout') timedOut = true;
+    // Floor this stage's achievement. When timed out this is the incumbent
+    // value, which is still an achievable lower bound — safe to lock in.
+    if (outcome.objectiveValue !== null) {
+      extra.push(`c_floor_${extra.length}: ${expr} >= ${Math.round(outcome.objectiveValue)}`);
+    }
   }
 
   // Fairness stage: minimize the largest per-class "unmatched" headcount.
   const matchedExpr = rankExprs[2];
   if (matchedExpr && model.classGroups.size > 0) {
     const fairnessConstraints: string[] = [];
-    for (const [className, indices] of model.classGroups) {
+    let classNumber = 0;
+    for (const [, indices] of model.classGroups) {
       const namesInClass = indices.flatMap((i) => model.matchedNamesByStudent[i]);
       const classExpr = sumExpr(namesInClass);
-      const clean = className.replace(/[^a-zA-Z0-9]+/g, '_');
+      // Index the constraint name by position, not by a sanitized class name:
+      // two distinct class names ("CM2-A", "CM2/A") can sanitize to the same
+      // token and collide.
       if (classExpr) {
-        fairnessConstraints.push(`c_fair_${clean}: M + ${classExpr} >= ${indices.length}`);
+        fairnessConstraints.push(`c_fair_${classNumber}: M + ${classExpr} >= ${indices.length}`);
       }
+      classNumber += 1;
     }
     if (fairnessConstraints.length > 0) {
       const lp = assembleLP({
@@ -220,15 +321,16 @@ async function runCascade(
         bounds: model.bounds,
         binaries: model.allXNames,
       });
-      const solution = highs.solve(lp);
-      lastSolution = solution;
-      if (isInfeasible(solution.Status) || !('Columns' in solution)) {
-        return { status: solution.Status, finalSolution: solution, model };
+      const outcome = engine.solve(lp);
+      lastOutcome = outcome;
+      if (!isUsable(outcome)) {
+        return { status: outcome.status, finalOutcome: outcome, model, timedOut };
       }
+      if (outcome.status === 'timeout') timedOut = true;
     }
   }
 
-  if (!lastSolution) {
+  if (!lastOutcome) {
     // No rank was ever optimizable (nobody has any recognized choice) — just
     // solve for any feasible assignment.
     const lp = assembleLP({
@@ -238,16 +340,22 @@ async function runCascade(
       bounds: model.bounds,
       binaries: model.allXNames,
     });
-    lastSolution = highs.solve(lp);
+    lastOutcome = engine.solve(lp);
+    if (lastOutcome.status === 'timeout') timedOut = true;
   }
 
-  return { status: lastSolution.Status, finalSolution: lastSolution, model };
+  return { status: lastOutcome.status, finalOutcome: lastOutcome, model, timedOut };
 }
 
-async function minimizeConflicts(highs: Highs, model: BaseModel): Promise<number> {
+interface ConflictCount {
+  value: number;
+  timedOut: boolean;
+}
+
+function minimizeConflicts(engine: SolverEngine, model: BaseModel): ConflictCount {
   const allZ = model.allZByPair.flat();
   const expr = sumExpr(allZ);
-  if (!expr) return 0;
+  if (!expr) return { value: 0, timedOut: false };
 
   const lp = assembleLP({
     direction: 'Minimize',
@@ -256,14 +364,14 @@ async function minimizeConflicts(highs: Highs, model: BaseModel): Promise<number
     bounds: model.bounds,
     binaries: model.allXNames,
   });
-  const solution = highs.solve(lp);
-  if (isInfeasible(solution.Status) || !('ObjectiveValue' in solution)) {
+  const outcome = engine.solve(lp);
+  if (!isUsable(outcome) || outcome.objectiveValue === null) {
     // Should not happen: the soft model (no hard <=1 exclusion constraints)
     // is only ever infeasible if capacity itself is insufficient, which
     // validateCoherence() already rules out before the solver runs.
-    return allZ.length;
+    return { value: allZ.length, timedOut: outcome.status === 'timeout' };
   }
-  return Math.round(solution.ObjectiveValue);
+  return { value: Math.round(outcome.objectiveValue), timedOut: outcome.status === 'timeout' };
 }
 
 // ---------------------------------------------------------------------------
@@ -281,20 +389,23 @@ export interface SolverOutcome {
   assignments: Map<string, string> | null;
   conflicts: ConflictInternal[];
   message?: string;
+  /** Machine-readable counterpart of `message`, for i18n by the caller. */
+  messageCode?: string;
+  messageParams?: Record<string, string | number>;
+  /** True when a solve stage returned a time-limited (not proven optimal) result. */
+  timedOut?: boolean;
 }
 
 function extractAssignments(
   data: NormalizedInput,
   model: BaseModel,
-  solution: HighsSolution,
+  columns: Map<string, number>,
 ): Map<string, string> {
   const assignments = new Map<string, string>();
-  if (!('Columns' in solution)) return assignments;
 
   data.students.forEach((student, i) => {
     data.workshops.forEach((workshop, j) => {
-      const column = solution.Columns[model.varX(i, j)];
-      if (column && 'Primal' in column && column.Primal > 0.5) {
+      if ((columns.get(model.varX(i, j)) ?? 0) > 0.5) {
         assignments.set(student.id, workshop.id);
       }
     });
@@ -316,81 +427,132 @@ function findConflicts(data: NormalizedInput, assignments: Map<string, string>):
 
 export async function solveAssignment(
   data: NormalizedInput,
-  loaderOptions?: HighsLoaderOptions,
+  loaderOptions?: SolverOptions,
 ): Promise<SolverOutcome> {
   if (data.students.length === 0) {
     return { status: 'OPTIMAL', assignments: new Map(), conflicts: [] };
   }
 
-  const highs = await highsLoader(loaderOptions);
+  const engine = await loadSolver({
+    locateFile: loaderOptions?.locateFile,
+    timeLimitSeconds: loaderOptions?.timeLimitSeconds ?? data.options.timeLimitSeconds,
+    randomSeed: loaderOptions?.randomSeed,
+  });
+
+  // Candidate reduction is only safe without exclusions (see chooseCandidates).
+  const candidates = data.exclusions.length === 0 ? chooseCandidates(engine, data) : fullCandidates(data);
 
   if (data.exclusions.length === 0) {
-    const model = buildBaseModel(data, 'none');
-    const { status, finalSolution } = await runCascade(highs, model, [], null);
-    if (isInfeasible(status) || !('Columns' in finalSolution)) {
-      return { status: 'INFEASIBLE', assignments: null, conflicts: [], message: `Solver status: ${status}.` };
+    const model = buildBaseModel(data, 'none', candidates);
+    const cascade = runCascade(engine, model, [], null);
+    if (!isUsable(cascade.finalOutcome)) {
+      return failure(cascade.timedOut, cascade.finalOutcome.rawStatus);
     }
-    return { status: 'OPTIMAL', assignments: extractAssignments(data, model, finalSolution), conflicts: [] };
+    return {
+      status: cascade.timedOut ? 'TIMED_OUT' : 'OPTIMAL',
+      assignments: extractAssignments(data, model, cascade.finalOutcome.columns),
+      conflicts: [],
+      timedOut: cascade.timedOut || undefined,
+      ...timeLimitMessage(cascade.timedOut),
+    };
   }
 
   if (!data.options.strictExclusions) {
-    return solveSoftAndCommit(highs, data);
+    return solveSoftAndCommit(engine, data, candidates);
   }
 
   // Strict mode: check whether all exclusions can be honored at all before
   // touching the confirmation flow.
-  const hardModel = buildBaseModel(data, 'hard');
-  const hardCascade = await runCascade(highs, hardModel, [], null);
+  const hardModel = buildBaseModel(data, 'hard', candidates);
+  const hardCascade = runCascade(engine, hardModel, [], null);
 
-  if (!isInfeasible(hardCascade.status) && 'Columns' in hardCascade.finalSolution) {
+  if (isUsable(hardCascade.finalOutcome)) {
     return {
-      status: 'OPTIMAL',
-      assignments: extractAssignments(data, hardModel, hardCascade.finalSolution),
+      status: hardCascade.timedOut ? 'TIMED_OUT' : 'OPTIMAL',
+      assignments: extractAssignments(data, hardModel, hardCascade.finalOutcome.columns),
       conflicts: [],
+      timedOut: hardCascade.timedOut || undefined,
+      ...timeLimitMessage(hardCascade.timedOut),
     };
   }
 
   // Exclusions cannot all be honored. Compute the actual best-effort
   // resolution so any preview shown to a human is accurate, but only commit
   // to it if relaxation was already confirmed.
-  const preview = await solveSoft(highs, data);
+  const preview = solveSoft(engine, data, candidates);
+  if (preview.assignments === null) return preview;
 
   if (data.options.confirmedExclusionRelaxation) {
-    return { ...preview, status: preview.status === 'INFEASIBLE' ? 'INFEASIBLE' : 'FEASIBLE_WITH_CONFLICTS' };
+    return { ...preview, status: 'FEASIBLE_WITH_CONFLICTS' };
   }
 
   return {
     ...preview,
-    status: preview.status === 'INFEASIBLE' ? 'INFEASIBLE' : 'NEEDS_CONFIRMATION',
+    status: 'NEEDS_CONFIRMATION',
     message:
-      preview.status === 'INFEASIBLE'
-        ? preview.message
-        : `${preview.conflicts.length} exclusion pair(s) cannot be honored given current capacities. ` +
-          `Review \`unresolvedExclusionConflicts\` and resubmit with options.confirmedExclusionRelaxation: true to proceed anyway.`,
+      `${preview.conflicts.length} exclusion pair(s) cannot be honored given current capacities. ` +
+      `Review \`unresolvedExclusionConflicts\` and resubmit with options.confirmedExclusionRelaxation: true to proceed anyway.`,
+    messageCode: 'EXCLUSION_RELAXATION_NEEDS_CONFIRMATION',
+    messageParams: { conflictCount: preview.conflicts.length },
   };
 }
 
-async function solveSoft(highs: Highs, data: NormalizedInput): Promise<SolverOutcome> {
-  const model = buildBaseModel(data, 'soft');
-  const conflictCap = await minimizeConflicts(highs, model);
-  const cascade = await runCascade(highs, model, [], conflictCap);
-
-  if (isInfeasible(cascade.status) || !('Columns' in cascade.finalSolution)) {
+function failure(timedOut: boolean, rawStatus: string): SolverOutcome {
+  if (timedOut) {
     return {
-      status: 'INFEASIBLE',
+      status: 'TIMED_OUT',
       assignments: null,
       conflicts: [],
-      message: `Solver status: ${cascade.status}.`,
+      message: 'The solver hit its time limit before finding any assignment.',
+      messageCode: 'SOLVER_TIME_LIMIT_NO_SOLUTION',
+      timedOut: true,
     };
   }
-
-  const assignments = extractAssignments(data, model, cascade.finalSolution);
-  const conflicts = findConflicts(data, assignments);
-  return { status: 'FEASIBLE_WITH_CONFLICTS', assignments, conflicts };
+  return {
+    status: 'INFEASIBLE',
+    assignments: null,
+    conflicts: [],
+    message: `No feasible assignment exists for this input (solver status: ${rawStatus}).`,
+    messageCode: 'NO_FEASIBLE_ASSIGNMENT',
+    messageParams: { solverStatus: rawStatus },
+  };
 }
 
-async function solveSoftAndCommit(highs: Highs, data: NormalizedInput): Promise<SolverOutcome> {
-  const result = await solveSoft(highs, data);
-  if (result.status === 'INFEASIBLE') return result;
+function timeLimitMessage(timedOut: boolean): Pick<SolverOutcome, 'message' | 'messageCode'> {
+  if (!timedOut) return {};
+  return {
+    message: 'The solver hit its time limit; the returned assignment is usable but not proven optimal.',
+    messageCode: 'SOLVER_TIME_LIMIT',
+  };
+}
+
+function solveSoft(engine: SolverEngine, data: NormalizedInput, candidates: CandidateSets): SolverOutcome {
+  const model = buildBaseModel(data, 'soft', candidates);
+  const conflictCount = minimizeConflicts(engine, model);
+  const cascade = runCascade(engine, model, [], conflictCount.value);
+  const timedOut = conflictCount.timedOut || cascade.timedOut;
+
+  if (!isUsable(cascade.finalOutcome)) {
+    return failure(timedOut, cascade.finalOutcome.rawStatus);
+  }
+
+  const assignments = extractAssignments(data, model, cascade.finalOutcome.columns);
+  const conflicts = findConflicts(data, assignments);
+  return {
+    status: 'FEASIBLE_WITH_CONFLICTS',
+    assignments,
+    conflicts,
+    timedOut: timedOut || undefined,
+    ...timeLimitMessage(timedOut),
+  };
+}
+
+function solveSoftAndCommit(
+  engine: SolverEngine,
+  data: NormalizedInput,
+  candidates: CandidateSets,
+): SolverOutcome {
+  const result = solveSoft(engine, data, candidates);
+  if (result.assignments === null) return result;
   return { ...result, status: result.conflicts.length > 0 ? 'FEASIBLE_WITH_CONFLICTS' : 'OPTIMAL' };
 }

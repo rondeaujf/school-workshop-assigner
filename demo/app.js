@@ -180,8 +180,14 @@ function renderResult(result, { onConfirm } = {}) {
 
   const warningsHtml =
     result.warnings && result.warnings.length > 0
-      ? `<ul class="warnings">${result.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`
+      ? `<ul class="warnings">${result.warnings
+          .map((w) => `<li><code>${escapeHtml(w.code)}</code> — ${escapeHtml(w.message)}</li>`)
+          .join('')}</ul>`
       : '';
+
+  const timedOutHtml = result.timedOut
+    ? '<p class="warnings">⏱ The solver hit its time limit — this assignment is usable but not proven optimal.</p>'
+    : '';
 
   const conflictsHtml =
     result.unresolvedExclusionConflicts && result.unresolvedExclusionConflicts.length > 0
@@ -202,6 +208,7 @@ function renderResult(result, { onConfirm } = {}) {
 
   el('result-panel').innerHTML = `
     <p><span class="status-badge status-${result.status}">${result.status}</span> ${result.message ? escapeHtml(result.message) : ''}</p>
+    ${timedOutHtml}
     <p>Total score (informational only — see README "Fairness model"): <b>${result.totalScore}</b></p>
     ${distributionHtml}
     ${conflictsHtml ? `<h4>Exclusion conflicts</h4>${conflictsHtml}` : ''}
@@ -213,7 +220,7 @@ function renderResult(result, { onConfirm } = {}) {
     ${renderWorkshopTable(result.byWorkshop)}
     <details>
       <summary>Raw result JSON</summary>
-      <pre>${escapeHtml(JSON.stringify(result, (k, v) => v, 2))}</pre>
+      <pre>${escapeHtml(JSON.stringify(result, null, 2))}</pre>
     </details>
   `;
 

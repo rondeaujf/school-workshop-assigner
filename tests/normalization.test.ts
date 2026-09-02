@@ -38,7 +38,12 @@ describe('normalizeInput — tolerance for heterogeneous CSV input', () => {
     });
 
     expect(data.students[0].choiceIds[0]).toBeNull();
-    expect(data.warnings.some((w) => w.includes('Nonexistent Workshop'))).toBe(true);
+    const warning = data.warnings.find((w) => w.code === 'UNRECOGNIZED_CHOICE');
+    expect(warning).toMatchObject({
+      code: 'UNRECOGNIZED_CHOICE',
+      params: { choice: 'Nonexistent Workshop', className: 'CM2-A' },
+    });
+    expect(warning?.message).toContain('Nonexistent Workshop');
   });
 
   it('warns when a student has no valid choice at all', () => {
@@ -47,7 +52,7 @@ describe('normalizeInput — tolerance for heterogeneous CSV input', () => {
       students: [{ lastName: 'No', firstName: 'Choice', className: 'CM2-A' }],
     });
 
-    expect(data.warnings.some((w) => w.includes('no valid recognized choice'))).toBe(true);
+    expect(data.warnings.some((w) => w.code === 'STUDENT_NO_VALID_CHOICE')).toBe(true);
   });
 
   it('generates unique composite IDs per (className, lastName, firstName) and handles cross-class homonyms', () => {
@@ -137,7 +142,7 @@ describe('normalizeInput — tolerance for heterogeneous CSV input', () => {
     });
 
     expect(data.exclusions).toHaveLength(0);
-    expect(data.warnings.some((w) => w.includes('not found'))).toBe(true);
+    expect(data.warnings.some((w) => w.code === 'EXCLUSION_STUDENT_NOT_FOUND')).toBe(true);
   });
 
   it('warns about duplicate workshop names instead of silently merging their capacities', () => {
@@ -150,7 +155,7 @@ describe('normalizeInput — tolerance for heterogeneous CSV input', () => {
     });
 
     expect(data.workshops).toHaveLength(2);
-    expect(data.warnings.some((w) => w.includes('Duplicate workshop name'))).toBe(true);
+    expect(data.warnings.some((w) => w.code === 'DUPLICATE_WORKSHOP_NAME')).toBe(true);
   });
 });
 
