@@ -1,6 +1,6 @@
 {
   "name": "school-workshop-assigner",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Fair, capacity- and exclusion-aware assignment of students to workshops (multi-class, tolerant of messy CSV input), powered by the HiGHS solver (WebAssembly).",
   "type": "module",
   "main": "./dist/index.js",
@@ -10,6 +10,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./worker": {
+      "types": "./dist/worker.d.ts",
+      "default": "./dist/worker.js"
+    },
+    "./worker-client": {
+      "types": "./dist/worker-client.d.ts",
+      "default": "./dist/worker-client.js"
     }
   },
   "files": [

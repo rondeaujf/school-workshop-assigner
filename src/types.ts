@@ -58,6 +58,22 @@ export interface AssignmentOptions {
    * directly to the best-effort result (`status: 'FEASIBLE_WITH_CONFLICTS'`).
    */
   confirmedExclusionRelaxation?: boolean;
+  /**
+   * Per-solve wall-clock limit passed to HiGHS, in seconds. The solver runs
+   * several sequential solves (see "Fairness model"); this caps EACH of them.
+   * When a solve hits the limit with a usable incumbent, the result is returned
+   * with `timedOut: true` (status `TIMED_OUT` if nothing usable was found at
+   * all). Undefined / <= 0 means no limit. Strongly recommended in a browser.
+   */
+  timeLimitSeconds?: number;
+  /**
+   * Safety ceiling on `students.length * workshops.length`. Above it,
+   * `assignStudentsToWorkshops` throws a `CoherenceError`
+   * (`code: 'PROBLEM_TOO_LARGE'`) instead of building a multi-megabyte model
+   * string that could exhaust a client's memory. Default 250_000. Set to 0 to
+   * disable the check.
+   */
+  maxProblemSize?: number;
 }
 
 export interface AssignmentInput {
@@ -66,6 +82,33 @@ export interface AssignmentInput {
   exclusions?: ExclusionInput[];
   options?: AssignmentOptions;
 }
+
+// ---------------------------------------------------------------------------
+// Warnings & errors (i18n-friendly: a stable `code` + `params`, plus an
+// English `message` as a ready-to-use default. Translate off `code`/`params`.)
+// ---------------------------------------------------------------------------
+
+export type WarningCode =
+  | 'DUPLICATE_WORKSHOP_NAME'
+  | 'UNRECOGNIZED_CHOICE'
+  | 'STUDENT_NO_VALID_CHOICE'
+  | 'EXCLUSION_STUDENT_NOT_FOUND'
+  | 'EXCLUSION_SELF_REFERENCE';
+
+export interface Warning {
+  /** Stable machine-readable identifier — switch on this to localize. */
+  code: WarningCode;
+  /** Interpolation values for the localized message (names, counts, ...). */
+  params: Record<string, string | number>;
+  /** English rendering, safe to display as-is when no translation is wired. */
+  message: string;
+}
+
+export type CoherenceErrorCode =
+  | 'NO_WORKSHOPS'
+  | 'INSUFFICIENT_CAPACITY'
+  | 'PROBLEM_TOO_LARGE'
+  | 'INVALID_CAPACITY';
 
 // ---------------------------------------------------------------------------
 // Normalized data (internal)
@@ -98,6 +141,8 @@ export interface NormalizedOptions {
   choiceWeights: number[];
   strictExclusions: boolean;
   confirmedExclusionRelaxation: boolean;
+  timeLimitSeconds?: number;
+  maxProblemSize: number;
 }
 
 export interface NormalizedInput {
@@ -105,7 +150,7 @@ export interface NormalizedInput {
   students: NormalizedStudent[];
   exclusions: NormalizedExclusion[];
   options: NormalizedOptions;
-  warnings: string[];
+  warnings: Warning[];
 }
 
 /**
@@ -116,11 +161,14 @@ export interface NormalizedInput {
  * because they are legitimate business outcomes a UI needs to render.
  */
 export class CoherenceError extends Error {
+  /** Stable machine-readable identifier — switch on this to localize. */
+  code: CoherenceErrorCode;
   details: Record<string, unknown>;
 
-  constructor(message: string, details: Record<string, unknown> = {}) {
+  constructor(code: CoherenceErrorCode, message: string, details: Record<string, unknown> = {}) {
     super(message);
     this.name = 'CoherenceError';
+    this.code = code;
     this.details = details;
   }
 }
@@ -134,6 +182,7 @@ export type AssignmentStatus =
   | 'FEASIBLE'
   | 'FEASIBLE_WITH_CONFLICTS'
   | 'NEEDS_CONFIRMATION'
+  | 'TIMED_OUT'
   | 'INFEASIBLE';
 
 export interface ClassroomAssignment {
@@ -170,7 +219,17 @@ export interface AssignmentResult {
   /** False for INFEASIBLE and NEEDS_CONFIRMATION — neither is a final, actionable assignment. */
   success: boolean;
   status: AssignmentStatus;
+  /** English rendering of `messageCode`, when present. */
   message?: string;
+  /** Stable machine-readable counterpart of `message`, for i18n by the caller. */
+  messageCode?: string;
+  messageParams?: Record<string, string | number>;
+  /**
+   * True when at least one internal solve returned a time-limited result: the
+   * assignment (if any) is usable but not proven optimal. See
+   * `AssignmentOptions.timeLimitSeconds`.
+   */
+  timedOut?: boolean;
   /** Informational only (see `AssignmentOptions.choiceWeights`) — not the optimization objective. */
   totalScore: number;
   statistics: {
@@ -188,10 +247,20 @@ export interface AssignmentResult {
    */
   unresolvedExclusionConflicts?: ExclusionConflict[];
   /** Non-blocking warnings (unrecognized choices, unmatched exclusion references, etc). */
-  warnings?: string[];
+  warnings?: Warning[];
 }
 
-/** Options passed to the HiGHS WebAssembly loader (e.g. `locateFile` for browser bundling). */
-export interface HighsLoaderOptions {
+/**
+ * Options forwarded to the HiGHS WebAssembly solver.
+ */
+export interface SolverOptions {
+  /** Locates the HiGHS `.wasm` asset (e.g. `(file) => \`/assets/${file}\``) for browser bundling. */
   locateFile?: (file: string) => string;
+  /** Per-solve wall-clock limit in seconds. Mirrors `AssignmentOptions.timeLimitSeconds`. */
+  timeLimitSeconds?: number;
+  /** Fixed RNG seed for reproducible tie-breaking across runs. Default 0. */
+  randomSeed?: number;
 }
+
+/** @deprecated Renamed to {@link SolverOptions}. */
+export type HighsLoaderOptions = SolverOptions;

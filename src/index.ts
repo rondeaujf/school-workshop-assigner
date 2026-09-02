@@ -5,9 +5,9 @@ export { validateCoherence } from './validator.js';
 import { normalizeInput } from './normalizer.js';
 import { validateCoherence } from './validator.js';
 import { solveAssignment } from './solver.js';
-import type { AssignmentInput, AssignmentResult, HighsLoaderOptions } from './types.js';
+import type { AssignmentInput, AssignmentResult, SolverOptions } from './types.js';
 
-const SUCCESS_STATUSES = new Set(['OPTIMAL', 'FEASIBLE', 'FEASIBLE_WITH_CONFLICTS']);
+const SUCCESS_STATUSES = new Set(['OPTIMAL', 'FEASIBLE', 'FEASIBLE_WITH_CONFLICTS', 'TIMED_OUT']);
 
 /**
  * Assigns students to workshops under capacity and exclusion constraints.
@@ -30,18 +30,28 @@ const SUCCESS_STATUSES = new Set(['OPTIMAL', 'FEASIBLE', 'FEASIBLE_WITH_CONFLICT
  * to commit to that resolution. Set `options.strictExclusions: false` to skip
  * this safety step entirely (e.g. for unattended/CI usage).
  *
+ * Time limit: pass `options.timeLimitSeconds` (recommended in a browser) to
+ * cap each internal solve. A time-limited run still returns a usable
+ * assignment when one was found, with `timedOut: true` (status `TIMED_OUT`
+ * when nothing usable was found at all).
+ *
+ * i18n: `warnings`, `messageCode`/`messageParams`, `status`, and
+ * `CoherenceError.code` are stable machine-readable values. Each `warning`
+ * also carries a ready-to-use English `message`; translate off `code`/`params`.
+ *
  * @throws {CoherenceError} for structurally invalid input (e.g. insufficient
- *   total capacity, no workshops at all) — a data problem the caller must fix,
- *   as opposed to solver outcomes like infeasibility, which are returned.
+ *   total capacity, no workshops, a model over `options.maxProblemSize`) — a
+ *   data problem the caller must fix, as opposed to solver outcomes like
+ *   infeasibility, which are returned.
  */
 export async function assignStudentsToWorkshops(
   input: AssignmentInput,
-  loaderOptions?: HighsLoaderOptions,
+  solverOptions?: SolverOptions,
 ): Promise<AssignmentResult> {
   const data = normalizeInput(input);
   const warnings = validateCoherence(data);
 
-  const outcome = await solveAssignment(data, loaderOptions);
+  const outcome = await solveAssignment(data, solverOptions);
 
   const emptyDistribution = { choice1: 0, choice2: 0, choice3: 0, unmatched: 0 };
 
@@ -50,6 +60,9 @@ export async function assignStudentsToWorkshops(
       success: false,
       status: outcome.status,
       message: outcome.message ?? 'No feasible assignment exists for this input.',
+      messageCode: outcome.messageCode,
+      messageParams: outcome.messageParams,
+      timedOut: outcome.timedOut,
       totalScore: 0,
       statistics: { totalStudents: data.students.length, choiceDistribution: emptyDistribution },
       byClassroom: {},
@@ -114,6 +127,9 @@ export async function assignStudentsToWorkshops(
     success: SUCCESS_STATUSES.has(outcome.status),
     status: outcome.status,
     message: outcome.message,
+    messageCode: outcome.messageCode,
+    messageParams: outcome.messageParams,
+    timedOut: outcome.timedOut,
     totalScore,
     statistics: { totalStudents: data.students.length, choiceDistribution },
     byClassroom,
