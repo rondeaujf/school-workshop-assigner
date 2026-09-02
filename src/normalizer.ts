@@ -1,18 +1,22 @@
-import type {
-  AssignmentInput,
-  NormalizedExclusion,
-  NormalizedInput,
-  NormalizedStudent,
-  NormalizedWorkshop,
+import { warn } from './messages.js';
+import {
+  CoherenceError,
+  type AssignmentInput,
+  type NormalizedExclusion,
+  type NormalizedInput,
+  type NormalizedStudent,
+  type NormalizedWorkshop,
+  type Warning,
 } from './types.js';
 
 const DEFAULT_CHOICE_WEIGHTS = [100, 40, 10];
+const DEFAULT_MAX_PROBLEM_SIZE = 250_000;
 
 /** Strips accents and turns a string into a compact ASCII snake_case identifier. */
 export function slugify(value: string): string {
   const cleaned = value
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\p{Diacritic}/gu, '')
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
@@ -24,7 +28,7 @@ export function slugify(value: string): string {
 function comparisonKey(value: string): string {
   return value
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\p{Diacritic}/gu, '')
     .trim()
     .replace(/\s+/g, ' ')
     .toLowerCase();
@@ -46,7 +50,7 @@ function uniqueId(base: string, counters: Map<string, number>): string {
  * files / classes) into a model the solver can consume.
  */
 export function normalizeInput(input: AssignmentInput): NormalizedInput {
-  const warnings: string[] = [];
+  const warnings: Warning[] = [];
 
   // --- Workshops -----------------------------------------------------------
   const workshops: NormalizedWorkshop[] = [];
@@ -57,7 +61,11 @@ export function normalizeInput(input: AssignmentInput): NormalizedInput {
     const name = collapseWhitespace(raw.name);
     const maxCapacity = Number(raw.maxCapacity);
     if (!Number.isFinite(maxCapacity) || maxCapacity < 0) {
-      throw new Error(`Invalid capacity for workshop "${name}": ${JSON.stringify(raw.maxCapacity)}`);
+      throw new CoherenceError(
+        'INVALID_CAPACITY',
+        `Invalid capacity for workshop "${name}": ${JSON.stringify(raw.maxCapacity)}`,
+        { workshop: name, maxCapacity: raw.maxCapacity },
+      );
     }
 
     const id = uniqueId(`ws_${slugify(name)}`, workshopCounters);
@@ -65,10 +73,7 @@ export function normalizeInput(input: AssignmentInput): NormalizedInput {
 
     const key = comparisonKey(name);
     if (nameToWorkshopId.has(key)) {
-      warnings.push(
-        `Duplicate workshop name "${name}": choices will only ever match the first one declared. ` +
-          `Give each workshop a distinct name if they are meant to be separate.`,
-      );
+      warnings.push(warn('DUPLICATE_WORKSHOP_NAME', { name }));
     } else {
       nameToWorkshopId.set(key, id);
     }
@@ -97,7 +102,7 @@ export function normalizeInput(input: AssignmentInput): NormalizedInput {
       const workshopId = nameToWorkshopId.get(comparisonKey(choice));
       if (!workshopId) {
         warnings.push(
-          `Choice "${choice}" for student "${displayName}" (${className}) does not match any known workshop.`,
+          warn('UNRECOGNIZED_CHOICE', { choice: collapseWhitespace(choice), studentName: displayName, className }),
         );
         return null;
       }
@@ -105,7 +110,7 @@ export function normalizeInput(input: AssignmentInput): NormalizedInput {
     });
 
     if (choiceIds.every((c) => c === null)) {
-      warnings.push(`Student "${displayName}" (${className}) has no valid recognized choice.`);
+      warnings.push(warn('STUDENT_NO_VALID_CHOICE', { studentName: displayName, className }));
     }
 
     students.push({ id, lastName, firstName, className, choiceIds });
@@ -124,16 +129,23 @@ export function normalizeInput(input: AssignmentInput): NormalizedInput {
     const idA = studentLookup.get(keyA);
     const idB = studentLookup.get(keyB);
 
+    const nameA = `${raw.studentA.lastName} ${raw.studentA.firstName}`.trim();
+    const nameB = `${raw.studentB.lastName} ${raw.studentB.firstName}`.trim();
+
     if (!idA || !idB) {
       warnings.push(
-        `Exclusion ignored (student not found): "${raw.studentA.lastName} ${raw.studentA.firstName}" (${raw.studentA.className}) / ` +
-          `"${raw.studentB.lastName} ${raw.studentB.firstName}" (${raw.studentB.className}).`,
+        warn('EXCLUSION_STUDENT_NOT_FOUND', {
+          studentA: nameA,
+          classNameA: raw.studentA.className,
+          studentB: nameB,
+          classNameB: raw.studentB.className,
+        }),
       );
       continue;
     }
     if (idA === idB) {
       warnings.push(
-        `Exclusion ignored (both sides refer to the same student): "${raw.studentA.lastName} ${raw.studentA.firstName}" (${raw.studentA.className}).`,
+        warn('EXCLUSION_SELF_REFERENCE', { studentA: nameA, classNameA: raw.studentA.className }),
       );
       continue;
     }
@@ -144,12 +156,20 @@ export function normalizeInput(input: AssignmentInput): NormalizedInput {
   const choiceWeights = input.options?.choiceWeights ?? DEFAULT_CHOICE_WEIGHTS;
   const strictExclusions = input.options?.strictExclusions ?? true;
   const confirmedExclusionRelaxation = input.options?.confirmedExclusionRelaxation ?? false;
+  const timeLimitSeconds =
+    typeof input.options?.timeLimitSeconds === 'number' && input.options.timeLimitSeconds > 0
+      ? input.options.timeLimitSeconds
+      : undefined;
+  const maxProblemSize =
+    typeof input.options?.maxProblemSize === 'number' && input.options.maxProblemSize >= 0
+      ? input.options.maxProblemSize
+      : DEFAULT_MAX_PROBLEM_SIZE;
 
   return {
     workshops,
     students,
     exclusions,
-    options: { choiceWeights, strictExclusions, confirmedExclusionRelaxation },
+    options: { choiceWeights, strictExclusions, confirmedExclusionRelaxation, timeLimitSeconds, maxProblemSize },
     warnings,
   };
 }
