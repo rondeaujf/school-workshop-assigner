@@ -87,6 +87,7 @@ describe('data coherence', () => {
       }),
     ).rejects.toMatchObject({
       name: 'CoherenceError',
+      code: 'INSUFFICIENT_CAPACITY',
       details: { totalCapacity: 1, studentCount: 2, shortfall: 1 },
     });
   });
