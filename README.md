@@ -297,3 +297,7 @@ npm test           # vitest run
 - **New result fields** — `messageCode`, `messageParams`, `timedOut`.
 - **New default** — `options.maxProblemSize` defaults to `250_000`; a very large input that used to (slowly) solve may now throw `PROBLEM_TOO_LARGE`. Set it to `0` to restore the old unbounded behavior.
 - **No behavioral change** to `byClassroom` / `byWorkshop` / `statistics` / `status` semantics for existing cases.
+
+## License
+
+ISC — see [LICENSE](LICENSE).
